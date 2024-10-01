@@ -1,0 +1,1 @@
+java -jar -Dspring.config.location=../conf/application.properties -Dlog4j.configuration=file:../conf/log4j.xml ss7-module-VERSION.jar

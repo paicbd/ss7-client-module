@@ -1,0 +1,354 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.2</version>
+        <relativePath/> <!-- lookup parent from repository -->
+    </parent>
+    <groupId>com.paicbd.smsc</groupId>
+    <artifactId>ss7-module</artifactId>
+    <version>2.0.0-SNAPSHOT</version>
+    <name>ss7-module</name>
+    <description>ss7-module</description>
+    <licenses>
+        <license>
+            <name>GNU Affero General Public License</name>
+            <url>http://www.gnu.org/licenses/agpl-3.0.html</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <developers>
+        <developer>
+            <name>Enmanuel Calero</name>
+            <email>enmanuel.calero@paicbd.com</email>
+            <organization>PAiC BD</organization>
+            <organizationUrl>https://paic-bd.com/</organizationUrl>
+            <timezone>-6</timezone>
+        </developer>
+        <developer>
+            <name>Obed Navarrete</name>
+            <email>obed.navarrete@paicbd.com</email>
+            <organization>PAiC BD</organization>
+            <organizationUrl>https://paicbd.com</organizationUrl>
+            <timezone>-6</timezone>
+        </developer>
+    </developers>
+    <properties>
+        <java.version>21</java.version>
+        <sctp.version>2.0.2-17</sctp.version>
+        <jss7.version>8.3.0-278</jss7.version>
+        <log4j.version>1.2.17</log4j.version>
+        <smsc-utils.version>2.0.0-1</smsc-utils.version>
+        <jsmpp.version>3.1.5</jsmpp.version>
+        <redis.clients.version>5.0.2</redis.clients.version>
+        <mockito.version>5.12.0</mockito.version>
+        <junit.jupiter.version>5.10.3</junit.jupiter.version>
+        <mockito-inline.version>5.2.0</mockito-inline.version>
+        <!-- Plugin versions -->
+        <codehaus.version>2.17.1</codehaus.version>
+        <surfire.plugin.version>3.3.1</surfire.plugin.version>
+        <sonar.scanner.version>4.0.0.4121</sonar.scanner.version>
+        <jacoco.version>0.8.12</jacoco.version>
+        <bean.matchers.version>0.14</bean.matchers.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-websocket</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>com.paicbd</groupId>
+            <artifactId>smsc-utils</artifactId>
+            <version>${smsc-utils.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.junit.vintage</groupId>
+                    <artifactId>junit-vintage-engine</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>junit</groupId>
+                    <artifactId>junit</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- SS7 -->
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.congestion</groupId>
+            <artifactId>congestion</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.statistics</groupId>
+            <artifactId>statistics-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <!-- SCTP -->
+        <dependency>
+            <groupId>org.mobicents.protocols.sctp</groupId>
+            <artifactId>sctp-api</artifactId>
+            <version>${sctp.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.mobicents.protocols.sctp</groupId>
+            <artifactId>sctp-impl</artifactId>
+            <version>${sctp.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+
+        <!-- M3UA -->
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.m3ua</groupId>
+            <artifactId>m3ua-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.m3ua</groupId>
+            <artifactId>m3ua-impl</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <!-- SCCP -->
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.sccp</groupId>
+            <artifactId>sccp-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.sccp</groupId>
+            <artifactId>sccp-impl</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.ss7ext</groupId>
+            <artifactId>ss7-ext-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.ss7ext</groupId>
+            <artifactId>ss7-ext-impl</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.sccp</groupId>
+            <artifactId>sccp-api-ext</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.sccp</groupId>
+            <artifactId>sccp-impl-ext</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <!-- TCAP -->
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.tcap</groupId>
+            <artifactId>tcap-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.tcap</groupId>
+            <artifactId>tcap-impl</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <!-- MAP -->
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.map</groupId>
+            <artifactId>map-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.map</groupId>
+            <artifactId>map-impl</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <!-- CAP -->
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.cap</groupId>
+            <artifactId>cap-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.cap</groupId>
+            <artifactId>cap-impl</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <!-- INAP -->
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.inap</groupId>
+            <artifactId>inap-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.inap</groupId>
+            <artifactId>inap-impl</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <!-- ISUP -->
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.isup</groupId>
+            <artifactId>isup-api</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.restcomm.protocols.ss7.isup</groupId>
+            <artifactId>isup-impl</artifactId>
+            <version>${jss7.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>redis.clients</groupId>
+            <artifactId>jedis</artifactId>
+            <version>${redis.clients.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jsmpp</groupId>
+            <artifactId>jsmpp</artifactId>
+            <version>${jsmpp.version}</version>
+        </dependency>
+
+        <!-- FOR TESTING GETTER AND SETTER -->
+        <dependency>
+            <groupId>com.google.code.bean-matchers</groupId>
+            <artifactId>bean-matchers</artifactId>
+            <version>${bean.matchers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.jupiter.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.jupiter.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/org.mockito/mockito-inline -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-inline</artifactId>
+            <version>${mockito-inline.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>versions-maven-plugin</artifactId>
+                <version>${codehaus.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>set</goal>
+                            <goal>commit</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surfire.plugin.version}</version>
+                <configuration>
+                    <includes>
+                        <include>**/*Test.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.sonarsource.scanner.maven</groupId>
+                <artifactId>sonar-maven-plugin</artifactId>
+                <version>${sonar.scanner.version}</version>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
