@@ -1,32 +1,46 @@
 package com.paicbd.module.ss7;
 
 import com.paicbd.module.dto.Gateway;
-import com.paicbd.module.ss7.layer.impl.GatewayUtil;
+import com.paicbd.module.ss7.layer.LayerManager;
 import com.paicbd.module.utils.AppProperties;
 import com.paicbd.module.utils.ExtendedResource;
+import com.paicbd.module.utils.GatewayCreator;
 import com.paicbd.smsc.cdr.CdrProcessor;
 import com.paicbd.smsc.dto.ErrorCodeMapping;
+import com.paicbd.smsc.exception.RTException;
 import com.paicbd.smsc.utils.Converter;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import redis.clients.jedis.JedisCluster;
 
-
-import java.util.HashMap;
+import java.io.File;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class ConnectionManagerTest {
+    @Mock
+    ExtendedResource extendedResource;
 
     @Mock
     JedisCluster jedisCluster;
@@ -44,87 +58,404 @@ class ConnectionManagerTest {
     CdrProcessor cdrProcessor;
 
     @InjectMocks
-    ExtendedResource extendedResource;
-
-    @InjectMocks
     ConnectionManager connectionManager;
 
     @Test
-    void testInit() {
+    @DisplayName("Init, when gateways and error code mapping from redis is empty, then load but maps size is zero")
+    void initWhenGatewaysAndErrorCodeMappingFromRedisIsEmptyThenLoadButMapsSizeIsZero() throws NoSuchFieldException, IllegalAccessException {
+        var spyGatewaysMap = spy(new ConcurrentHashMap<Integer, Gateway>());
+        var spyErrorCodeMappingConcurrentHashMap = spy(new ConcurrentHashMap<String, List<ErrorCodeMapping>>());
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                spyErrorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hgetAll("ss7_gateways")).thenReturn(Collections.emptyMap());
+        when(appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
+        when(jedisCluster.hgetAll("error_code_mapping")).thenReturn(Collections.emptyMap());
+
+        var spyConnectionManager = spy(connectionManager);
+        spyConnectionManager.init();
+        assertEquals(0, spyGatewaysMap.size());
+        assertEquals(0, spyErrorCodeMappingConcurrentHashMap.size());
+        assertEquals(0, getConcurrentHashMap().size());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    @DisplayName("Init, when gateways and error code mapping from redis is not empty, then load maps")
+    void initWhenGatewaysAndErrorCodeMappingNotEmptyThenLoadMaps() throws NoSuchFieldException, IllegalAccessException {
+        var spyGatewaysMap = spy(new ConcurrentHashMap<Integer, Gateway>());
+        var spyErrorCodeMappingConcurrentHashMap = spy(new ConcurrentHashMap<String, List<ErrorCodeMapping>>());
+
+        Gateway ss7Gateway = GatewayCreator.buildSS7Gateway("ss7gw01", 1, 4);
         when(appProperties.getConfigPath()).thenReturn("");
-        Mockito.when(this.appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
-        Map<String, String> gatewaysMap = new HashMap<>();
-        var gateway = GatewayUtil.getGateway(8888,9999);
-        String gatewayInRaw = Converter.valueAsString(gateway);
-        gatewaysMap.put("1", gatewayInRaw);
-        Mockito.when(this.jedisCluster.hgetAll(appProperties.getKeyGatewayRedis())).thenReturn(gatewaysMap);
+        extendedResource = new ExtendedResource(appProperties);
+        String path = extendedResource.createDirectory(ss7Gateway.getName());
+        when(extendedResource.createDirectory(ss7Gateway.getName())).thenReturn(path);
 
-        Mockito.when(this.appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
-        Map<String, String> errorCodeMap = new HashMap<>();
-        errorCodeMap.put("1", "[{\"error_code\":97,\"delivery_error_code\":5,\"delivery_status\":\"EXPIRED\"},{\"error_code\":88,\"delivery_error_code\":6,\"delivery_status\":\"EXPIRED\"}]'");
-        Mockito.when(this.jedisCluster.hgetAll(appProperties.getKeyErrorCodeMapping())).thenReturn(errorCodeMap);
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                spyErrorCodeMappingConcurrentHashMap, cdrProcessor);
 
-        this.gatewayConcurrentMap = new ConcurrentHashMap<>();
-        this.gatewayConcurrentMap.put(1, gateway);
+        ErrorCodeMapping errorCodeMapping = new ErrorCodeMapping(121, 88, "UNDELIV");
 
-        this.connectionManager = new ConnectionManager(extendedResource, jedisCluster, gatewayConcurrentMap, appProperties,
+
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hgetAll("ss7_gateways")).thenReturn(
+                Collections.singletonMap("1", ss7Gateway.toString()));
+        when(appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
+        when(jedisCluster.hgetAll("error_code_mapping")).thenReturn(
+                Collections.singletonMap(ss7Gateway.getMnoId().toString(),
+                        Converter.valueAsString(List.of(errorCodeMapping))));
+
+        var spyConnectionManager = spy(connectionManager);
+        spyConnectionManager.init();
+
+        assertEquals(1, spyGatewaysMap.size());
+        assertEquals(1, spyErrorCodeMappingConcurrentHashMap.size());
+
+        ArgumentCaptor<Integer> networkIdCaptor = ArgumentCaptor.forClass(Integer.class);
+        ArgumentCaptor<Gateway> gatewayCaptor = ArgumentCaptor.forClass(Gateway.class);
+
+        ArgumentCaptor<String> mnoIdCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<List<ErrorCodeMapping>> errorCodeMappingCaptor = ArgumentCaptor.forClass(List.class);
+
+        verify(spyGatewaysMap).put(networkIdCaptor.capture(), gatewayCaptor.capture());
+        verify(spyErrorCodeMappingConcurrentHashMap).put(mnoIdCaptor.capture(), errorCodeMappingCaptor.capture());
+
+        assertEquals(ss7Gateway.getNetworkId(), networkIdCaptor.getValue());
+        assertEquals(ss7Gateway.toString(), gatewayCaptor.getValue().toString());
+
+        assertEquals("1", mnoIdCaptor.getValue());
+        assertEquals(Converter.valueAsString(List.of(errorCodeMapping)),
+                Converter.valueAsString(errorCodeMappingCaptor.getValue()));
+
+        var layerManagerMap = getConcurrentHashMap();
+        assertEquals(1, layerManagerMap.size());
+    }
+
+    @Test
+    @DisplayName("Init, Invalid format for ErrorCodeMapping JSON, then thrown RTException")
+    void initWhenErrorCodeMappingInvalidJsonThenThrownRTException() throws NoSuchFieldException, IllegalAccessException {
+        var spyGatewaysMap = spy(new ConcurrentHashMap<Integer, Gateway>());
+        var spyErrorCodeMappingConcurrentHashMap = spy(new ConcurrentHashMap<String, List<ErrorCodeMapping>>());
+
+        Gateway ss7Gateway = GatewayCreator.buildSS7Gateway("ss7gw01", 1, 4);
+        when(appProperties.getConfigPath()).thenReturn("");
+        extendedResource = new ExtendedResource(appProperties);
+        String path = extendedResource.createDirectory(ss7Gateway.getName());
+        when(extendedResource.createDirectory(ss7Gateway.getName())).thenReturn(path);
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                spyErrorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hgetAll("ss7_gateways")).thenReturn(
+                Collections.singletonMap("1", ss7Gateway.toString()));
+
+        when(appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
+        when(jedisCluster.hgetAll("error_code_mapping")).thenReturn(
+                Collections.singletonMap("invalid_json_x1", "invalid_json_x2"));
+
+        var spyConnectionManager = spy(connectionManager);
+        try {
+            spyConnectionManager.init();
+        } catch (RTException | NullPointerException e) {
+            assertInstanceOf(RTException.class, e);
+        }
+
+        assertEquals(1, spyGatewaysMap.size());
+        assertEquals(0, spyErrorCodeMappingConcurrentHashMap.size());
+        assertEquals(1, getConcurrentHashMap().size());
+
+        verifyNoInteractions(cdrProcessor);
+    }
+
+    @Test
+    @DisplayName("Init, when gateway invalid format, then size of gateways map is zero")
+    void initWhenGatewayInvalidFormatThenSizeOfGatewaysMapIsZero() {
+        var spyGatewaysMap = spy(new ConcurrentHashMap<Integer, Gateway>());
+        var spyErrorCodeMappingConcurrentHashMap = spy(new ConcurrentHashMap<String, List<ErrorCodeMapping>>());
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                spyErrorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hgetAll("ss7_gateways")).thenReturn(
+                Collections.singletonMap("1", "invalid_json"));
+        assertThrows(NullPointerException.class, connectionManager::init);
+    }
+
+    @Test
+    @DisplayName("Init, when gateway exists, then refresh layer manager")
+    void updateGatewayWhenGatewayExistsThenRefreshLayerManager() {
+        String networkIdToUpdate = "4";
+        var spyGatewaysMap = spy(new ConcurrentHashMap<Integer, Gateway>());
+
+        Gateway previousGateway = GatewayCreator.buildSS7Gateway("ss7gw01", 1, Integer.parseInt(networkIdToUpdate));
+        spyGatewaysMap.put(previousGateway.getNetworkId(), previousGateway);
+
+        Gateway newGateway = GatewayCreator.buildSS7Gateway("ss7gw01", 7, 4);
+
+        when(appProperties.getConfigPath()).thenReturn("");
+        extendedResource = new ExtendedResource(appProperties);
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
                 errorCodeMappingConcurrentHashMap, cdrProcessor);
 
-        assertDoesNotThrow(() -> this.connectionManager.init());
+        String path = extendedResource.createDirectory(newGateway.getName());
+        when(extendedResource.createDirectory(newGateway.getName())).thenReturn(path);
 
-        gatewaysMap.clear();
-        errorCodeMap.clear();
-        assertDoesNotThrow(() -> this.connectionManager.init());
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hget(appProperties.getKeyGatewayRedis(), networkIdToUpdate)).thenReturn(newGateway.toString());
 
-        gatewaysMap.put("1", "{//]{");
-        errorCodeMap.put("1", "[\"delivery_error_code\":5,\"delivery_status\":\"EXPIRED\"},{\"error_code\":88,\"delivery_error_code\":6,\"delivery_status\":\"EXPIRED\"}]'");
-        assertDoesNotThrow(() -> this.connectionManager.init());
+        var spyConnectionManager = spy(connectionManager);
+        spyConnectionManager.init();
+        spyConnectionManager.updateGateway(networkIdToUpdate);
+        verify(spyGatewaysMap).containsKey(Integer.parseInt(networkIdToUpdate));
 
-        assertDoesNotThrow(() -> this.connectionManager.destroy());
+        Gateway capturedGateway = spyGatewaysMap.get(Integer.parseInt(networkIdToUpdate));
+
+        assertEquals(1, spyGatewaysMap.size());
+        assertEquals(newGateway.toString(), capturedGateway.toString());
     }
 
     @Test
-    void testUpdateErrorCodeMapping() {
-        String errorCodeMapping = "[{\"error_code\":97,\"delivery_error_code\":5,\"delivery_status\":\"EXPIRED\"},{\"error_code\":88,\"delivery_error_code\":6,\"delivery_status\":\"EXPIRED\"}]";
-        Mockito.when(this.jedisCluster.hget(this.appProperties.getKeyErrorCodeMapping(), "2")).thenReturn(errorCodeMapping);
-        assertDoesNotThrow(() -> this.connectionManager.updateErrorCodeMapping("2"));
-        Mockito.when(this.jedisCluster.hget(this.appProperties.getKeyErrorCodeMapping(), "3")).thenReturn(null);
-        assertDoesNotThrow(() -> this.connectionManager.updateErrorCodeMapping("3"));
-        Mockito.when(this.jedisCluster.hget(this.appProperties.getKeyErrorCodeMapping(), "4")).thenReturn("[{\"error_code\":97,\"delivery_error_code\"");
-        assertDoesNotThrow(() -> this.connectionManager.updateErrorCodeMapping("4"));
-    }
+    @DisplayName("Update Gateway, when gateway does not exist, then add gateway")
+    void updateGatewayWhenGatewayDoesNotExistThenAddGateway() {
+        String networkIdToUpdate = "4";
+        var spyGatewaysMap = spy(new ConcurrentHashMap<Integer, Gateway>());
 
-    void initConnectionManager() {
         when(appProperties.getConfigPath()).thenReturn("");
-        Mockito.when(this.appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
-        var gateway = GatewayUtil.getGateway(8888,9999);
-        this.gatewayConcurrentMap = new ConcurrentHashMap<>();
-        String gatewayInRaw = Converter.valueAsString(gateway);
-        Mockito.when(this.jedisCluster.hget(appProperties.getKeyGatewayRedis(), "1")).thenReturn(gatewayInRaw);
-        this.connectionManager = new ConnectionManager(this.extendedResource, this.jedisCluster, this.gatewayConcurrentMap,
-                this.appProperties, this.errorCodeMappingConcurrentHashMap, this.cdrProcessor);
+        extendedResource = new ExtendedResource(appProperties);
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        Gateway newGateway = GatewayCreator.buildSS7Gateway("gwNetId4", 7, 4);
+
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hget(appProperties.getKeyGatewayRedis(), networkIdToUpdate)).thenReturn(newGateway.toString());
+
+        var spyConnectionManager = spy(connectionManager);
+        spyConnectionManager.init();
+        spyConnectionManager.updateGateway(networkIdToUpdate);
+        verify(spyGatewaysMap).containsKey(Integer.parseInt(networkIdToUpdate));
+
+        Gateway capturedGateway = spyGatewaysMap.get(Integer.parseInt(networkIdToUpdate));
+
+        assertEquals(1, spyGatewaysMap.size());
+        assertEquals(newGateway.toString(), capturedGateway.toString());
     }
 
     @Test
-    void testAddGateway() {
-        initConnectionManager();
-        assertDoesNotThrow(() -> this.connectionManager.updateGateway("1"));
-        assertDoesNotThrow(() -> this.connectionManager.deleteGateway("1"));
+    @DisplayName("Update Gateway, when the mnoId does not exist, then if the key exists in the map, then remove it")
+    void updateErrorCodeMappingWhenGetNullFromRedisThenRemoveItFromMap() {
+        ErrorCodeMapping currentErrorCodeMapping = new ErrorCodeMapping(121, 88, "UNDELIV");
+        var spyErrorCodeMappingConcurrentHashMap = spy(new ConcurrentHashMap<String, List<ErrorCodeMapping>>());
+        spyErrorCodeMappingConcurrentHashMap.put("1", List.of(currentErrorCodeMapping));
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, gatewayConcurrentMap, appProperties,
+                spyErrorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        when(appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
+        when(jedisCluster.hget(appProperties.getKeyErrorCodeMapping(), "1")).thenReturn(null);
+
+        connectionManager.updateErrorCodeMapping("1");
+
+        verify(spyErrorCodeMappingConcurrentHashMap).remove("1");
+        assertEquals(0, spyErrorCodeMappingConcurrentHashMap.size());
     }
 
     @Test
-    void testUpdateGateway() {
-        var gateway = GatewayUtil.getGateway(5555,7777);
-        String gatewayInRaw = Converter.valueAsString(gateway);
-        initConnectionManager();
-        assertDoesNotThrow(() -> this.connectionManager.updateGateway("1"));
-        Mockito.when(this.jedisCluster.hget(appProperties.getKeyGatewayRedis(), "1")).thenReturn(gatewayInRaw);
-        assertDoesNotThrow(() -> this.connectionManager.updateGateway("1"));
-        assertDoesNotThrow(() -> this.connectionManager.deleteGateway("1"));
+    @DisplayName("Update ErrorCodeMapping, when get list from redis, then do it successfully")
+    void updateErrorCodeMappingWhenGetListFromRedisThenDoItSuccessfully() {
+        ErrorCodeMapping currentErrorCodeMapping = new ErrorCodeMapping(121, 88, "UNDELIV");
+        var spyErrorCodeMappingConcurrentHashMap = spy(new ConcurrentHashMap<String, List<ErrorCodeMapping>>());
+        spyErrorCodeMappingConcurrentHashMap.put("1", List.of(currentErrorCodeMapping));
+
+        ErrorCodeMapping additionalErrorCodeMapping = new ErrorCodeMapping(122, 89, "UNDELIV");
+        when(appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
+        when(jedisCluster.hget(appProperties.getKeyErrorCodeMapping(), "1")).thenReturn(
+                Converter.valueAsString(List.of(currentErrorCodeMapping, additionalErrorCodeMapping)));
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, gatewayConcurrentMap, appProperties,
+                spyErrorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        connectionManager.updateErrorCodeMapping("1");
+
+        assertEquals(1, spyErrorCodeMappingConcurrentHashMap.size());
+        assertTrue(spyErrorCodeMappingConcurrentHashMap.containsKey("1"));
+        assertEquals(2, spyErrorCodeMappingConcurrentHashMap.get("1").size());
     }
 
     @Test
-    void testDeleteGatewayNotFound() {
-        assertDoesNotThrow(() -> this.connectionManager.deleteGateway("5"));
+    @DisplayName("Update ErrorCodeMapping, when get key error code mapping throws exception, then thrown RTException")
+    void updateErrorCodeMappingWhenGetKeyErrorCodeMappingThrowsExceptionThenThrownRTException() {
+        when(appProperties.getKeyErrorCodeMapping()).thenThrow(new RTException("Error"));
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, gatewayConcurrentMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        connectionManager.updateErrorCodeMapping("1");
+
+        verifyNoInteractions(errorCodeMappingConcurrentHashMap);
+    }
+
+    @Test
+    @DisplayName("Destroy, when app is stopped, then stop manager")
+    void destroyWhenAppIsStoppedThenStopManager() {
+        var spyGatewaysMap = new ConcurrentHashMap<Integer, Gateway>();
+
+        Gateway gateway = GatewayCreator.buildSS7Gateway("ss7gw01", 1, 4);
+        spyGatewaysMap.put(gateway.getNetworkId(), gateway);
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hgetAll("ss7_gateways")).thenReturn(Collections.singletonMap("1", gateway.toString()));
+        when(appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
+        when(jedisCluster.hgetAll("error_code_mapping")).thenReturn(
+                Collections.singletonMap(gateway.getMnoId().toString(),
+                        Converter.valueAsString(List.of(new ErrorCodeMapping(121, 88, "UNDELIV")))));
+        when(extendedResource.createDirectory(anyString())).thenReturn("/tmp/ss7GW07");
+
+        connectionManager.init();
+        connectionManager.destroy();
+
+        verify(extendedResource).deleteDirectory(any(File.class));
+    }
+
+    @Test
+    @DisplayName("Delete Gateway, when gateway exists, then remove gateway and stop layer")
+    void deleteGatewayWhenGatewayExistsThenRemoveGateway() {
+        var spyGatewaysMap = spy(new ConcurrentHashMap<Integer, Gateway>());
+
+        Gateway gateway = GatewayCreator.buildSS7Gateway("ss7gw01", 1, 4);
+        spyGatewaysMap.put(gateway.getNetworkId(), gateway);
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        connectionManager = spy(connectionManager);
+        doNothing().when(connectionManager).stopLayer(4);
+
+        connectionManager.deleteGateway("4");
+
+        verify(spyGatewaysMap).remove(4);
+        verify(connectionManager).stopLayer(4);
+
+        assertEquals(0, spyGatewaysMap.size());
+        assertNull(spyGatewaysMap.get(4));
+    }
+
+    @Test
+    @DisplayName("Delete Gateway, when gateway does not exist, then do nothing")
+    void deleteGatewayWhenGatewayDoesNotExistThenDoNothing() {
+        var spyGatewaysMap = spy(new ConcurrentHashMap<Integer, Gateway>());
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        connectionManager.deleteGateway("4");
+
+        verify(spyGatewaysMap).remove(4);
+    }
+
+    @Test
+    @DisplayName("Manage Socket, when layer manager is null, then log warning")
+    void manageSocketWhenLayerManagerIsNullThenLogWarning() {
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, gatewayConcurrentMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+        connectionManager = spy(connectionManager);
+        connectionManager.manageSocket("1", 1, false);
+        verify(connectionManager).manageSocket("1", 1, false);
+    }
+
+    @Test
+    @DisplayName("Manage Socket, when layer manager is not null, then manage socket")
+    void manageSocketWhenLayerManagerIsNotNullThenManageSocket() {
+        var spyGatewaysMap = new ConcurrentHashMap<Integer, Gateway>();
+
+        Gateway gateway = GatewayCreator.buildSS7Gateway("ss7gw01", 1, 4);
+        when(appProperties.getConfigPath()).thenReturn("");
+        extendedResource = new ExtendedResource(appProperties);
+        String path = extendedResource.createDirectory(gateway.getName());
+        when(extendedResource.createDirectory(gateway.getName())).thenReturn(path);
+
+        spyGatewaysMap.put(gateway.getNetworkId(), gateway);
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hgetAll("ss7_gateways")).thenReturn(Collections.singletonMap("1", gateway.toString()));
+        when(appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
+        when(jedisCluster.hgetAll("error_code_mapping")).thenReturn(
+                Collections.singletonMap(gateway.getMnoId().toString(),
+                        Converter.valueAsString(List.of(new ErrorCodeMapping(121, 88, "UNDELIV")))));
+
+        connectionManager.init();
+        connectionManager = spy(connectionManager);
+        connectionManager.manageSocket("4", 1, false);
+        verify(connectionManager).manageSocket("4", 1, false);
+    }
+
+    @Test
+    @DisplayName("Manage Association, when layer manager is null, then log warning")
+    void manageAssociationWhenLayerManagerIsNullThenLogWarning() {
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, gatewayConcurrentMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+        connectionManager = spy(connectionManager);
+        connectionManager.manageAssociation("1", "assoc", false);
+        verify(connectionManager).manageAssociation("1", "assoc", false);
+    }
+
+    @Test
+    @DisplayName("Manage Association, when layer manager is not null, then manage association")
+    void manageAssociationWhenLayerManagerIsNotNullThenManageAssociation() {
+        var spyGatewaysMap = new ConcurrentHashMap<Integer, Gateway>();
+
+        Gateway gateway = GatewayCreator.buildSS7Gateway("ss7gw01", 1, 4);
+        spyGatewaysMap.put(gateway.getNetworkId(), gateway);
+
+        connectionManager = new ConnectionManager(
+                extendedResource, jedisCluster, spyGatewaysMap, appProperties,
+                errorCodeMappingConcurrentHashMap, cdrProcessor);
+
+        when(appProperties.getKeyGatewayRedis()).thenReturn("ss7_gateways");
+        when(jedisCluster.hgetAll("ss7_gateways")).thenReturn(Collections.singletonMap("1", gateway.toString()));
+        when(appProperties.getKeyErrorCodeMapping()).thenReturn("error_code_mapping");
+        when(jedisCluster.hgetAll("error_code_mapping")).thenReturn(
+                Collections.singletonMap(gateway.getMnoId().toString(),
+                        Converter.valueAsString(List.of(new ErrorCodeMapping(121, 88, "UNDELIV")))));
+        when(extendedResource.createDirectory(anyString())).thenReturn("/tmp/ss7GW07");
+        connectionManager.init();
+        connectionManager = spy(connectionManager);
+        connectionManager.manageAssociation("4", "assoc", false);
+        verify(connectionManager).manageAssociation("4", "assoc", false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private ConcurrentHashMap<Integer, LayerManager> getConcurrentHashMap() throws NoSuchFieldException, IllegalAccessException {
+        Class<?> clazz = connectionManager.getClass();
+        var field = clazz.getDeclaredField("layerManagerMap");
+        field.setAccessible(true);
+        return (ConcurrentHashMap<Integer, LayerManager>) field.get(connectionManager);
     }
 }

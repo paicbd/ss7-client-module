@@ -1,14 +1,25 @@
 package com.paicbd.module.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.paicbd.smsc.utils.Converter;
+import com.paicbd.smsc.utils.Generated;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Getter
 @Setter
+@Generated
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class Gateway {
     @JsonProperty("name")
     private String name;
+
+    private int enabled;
 
     @JsonProperty("mno_id")
     private Integer mnoId;
@@ -28,4 +39,8 @@ public class Gateway {
     @JsonProperty("map")
     private SettingsMAP settingsMAP;
 
+    @Override
+    public String toString() {
+        return Converter.valueAsString(this);
+    }
 }

@@ -1,8 +1,11 @@
 package com.paicbd.module.utils;
 
+import com.paicbd.smsc.utils.Generated;
+
 import java.util.HashMap;
 import java.util.Map;
 
+@Generated
 public class Constants {
     private Constants() {
         throw new IllegalStateException("Utility Class");
@@ -11,6 +14,12 @@ public class Constants {
     public static final String UPDATE_ERROR_CODE_MAPPING_ENDPOINT = "/app/updateErrorCodeMapping";
     public static final String DELETE_SS7_GATEWAY_ENDPOINT = "/app/ss7/deleteGateway";
     public static final String UPDATE_SS7_GATEWAY_ENDPOINT = "/app/ss7/updateGateway";
+    public static final String START_SS7_ASSOCIATION_ENDPOINT = "/app/ss7/startAssociation";
+    public static final String STOP_SS7_ASSOCIATION_ENDPOINT = "/app/ss7/stopAssociation";
+    public static final String START_SS7_SOCKET_ENDPOINT = "/app/ss7/startSocket";
+    public static final String STOP_SS7_SOCKET_ENDPOINT = "/app/ss7/stopSocket";
+    public static final String CONNECT_SS7_GATEWAY_ENDPOINT = "/app/ss7/connectGateway";
+    public static final String STOP_SS7_GATEWAY_ENDPOINT = "/app/ss7/stopGateway";
     public static final String RESPONSE_SS7_CLIENT_ENDPOINT = "/app/response-ss7-client";
     public static final String ABSENT_SUBSCRIBER_HASH_NAME = "_absent_subscriber";
     public static final String PROTOCOL = "SS7";

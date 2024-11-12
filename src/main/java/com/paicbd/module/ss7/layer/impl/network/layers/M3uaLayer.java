@@ -71,14 +71,12 @@ public class M3uaLayer implements ILayer {
         log.info("Persist Dir -> {}", this.persistDir);
         this.m3ua.setPersistDir(this.persistDir);
         this.m3ua.setTransportManagement(this.sctp.getSctpManagement());
+        this.m3ua.setDeliveryMessageThreadCount(this.settingsM3UA.getGeneral().getThreadCount());
 
-        if (this.settingsM3UA.getGeneral().getThreadCount() > 0)
-            this.m3ua.setDeliveryMessageThreadCount(this.settingsM3UA.getGeneral().getThreadCount());
-
-        if (this.settingsM3UA.getGeneral().getMaxSequenceNumber() != null && this.settingsM3UA.getGeneral().getMaxSequenceNumber() > 0)
+        if (this.settingsM3UA.getGeneral().getMaxSequenceNumber() != null)
             this.m3ua.setMaxSequenceNumber(this.settingsM3UA.getGeneral().getMaxSequenceNumber());
 
-        if (this.settingsM3UA.getGeneral().getMaxForRoute() != null && this.settingsM3UA.getGeneral().getMaxForRoute() > 0)
+        if (this.settingsM3UA.getGeneral().getMaxForRoute() != null)
             this.m3ua.setMaxAsForRoute(this.settingsM3UA.getGeneral().getMaxForRoute());
 
         if (this.settingsM3UA.getGeneral().getRoutingLabelFormat() != null)
@@ -113,7 +111,7 @@ public class M3uaLayer implements ILayer {
                         this.parameterFactory.createRoutingContext(new long[]{as.getRoutingContext()}),
                         this.parameterFactory.createTrafficModeType(as.getTrafficModeId()),
                         as.getMinimumAspForLoadshare(),
-                        this.parameterFactory.createNetworkAppearance(as.getNetworkAppearance())
+                        (Objects.nonNull(as.getNetworkAppearance()) ? this.parameterFactory.createNetworkAppearance(as.getNetworkAppearance()) : null)
                 );
             } catch (Exception e) {
                 throw new RTException("Error on create AS for " + this.getName(), e);

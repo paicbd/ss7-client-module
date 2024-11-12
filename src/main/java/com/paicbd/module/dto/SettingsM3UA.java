@@ -1,13 +1,19 @@
 package com.paicbd.module.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.util.List;
 
 @Getter
 @Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class SettingsM3UA {
 
     @JsonProperty("general")
@@ -19,6 +25,9 @@ public class SettingsM3UA {
 
     @Getter
     @Setter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class General {
         @JsonProperty("id")
         private int id;
@@ -56,6 +65,9 @@ public class SettingsM3UA {
 
     @Getter
     @Setter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class Associations {
         private List<Socket> sockets;
         @JsonProperty("associations")
@@ -64,6 +76,9 @@ public class SettingsM3UA {
 
         @Getter
         @Setter
+        @Builder
+        @NoArgsConstructor
+        @AllArgsConstructor
         public static class Association {
             private int id;
             private String name;
@@ -82,6 +97,9 @@ public class SettingsM3UA {
 
         @Getter
         @Setter
+        @Builder
+        @NoArgsConstructor
+        @AllArgsConstructor
         public static class Socket {
             private int id;
             private String name;
@@ -106,6 +124,9 @@ public class SettingsM3UA {
 
     @Getter
     @Setter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class ApplicationServer {
 
         private int id;
@@ -116,7 +137,7 @@ public class SettingsM3UA {
         @JsonProperty("routing_context")
         private int routingContext;
         @JsonProperty("network_appearance")
-        private int networkAppearance;
+        private Integer networkAppearance;
         @JsonProperty("traffic_mode_id")
         private int trafficModeId;
         @JsonProperty("minimum_asp_for_loadshare")
@@ -127,6 +148,9 @@ public class SettingsM3UA {
 
     @Getter
     @Setter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class Route {
         private int id;
         @JsonProperty("origination_point_code")

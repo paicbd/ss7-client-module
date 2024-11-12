@@ -1,14 +1,21 @@
 package com.paicbd.module.utils;
 
-import com.paicbd.module.ss7.layer.impl.MessageUtil;
-import org.jsmpp.bean.NumberingPlanIndicator;
-import org.jsmpp.bean.TypeOfNumber;
+import com.paicbd.module.ss7.layer.impl.channel.ChannelMessage;
+import com.paicbd.smsc.dto.MessageEvent;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.restcomm.protocols.ss7.indicator.NatureOfAddress;
 import org.restcomm.protocols.ss7.indicator.NumberingPlan;
 import org.restcomm.protocols.ss7.indicator.RoutingIndicator;
+import org.restcomm.protocols.ss7.map.api.errors.MAPErrorMessage;
 import org.restcomm.protocols.ss7.map.api.primitives.AddressNature;
-import org.restcomm.protocols.ss7.map.api.smstpdu.NumberingPlanIdentification;
+import org.restcomm.protocols.ss7.map.api.primitives.ISDNAddressString;
+import org.restcomm.protocols.ss7.map.api.smstpdu.AbsoluteTimeStamp;
 import org.restcomm.protocols.ss7.map.errors.MAPErrorMessageSystemFailureImpl;
 import org.restcomm.protocols.ss7.map.errors.MAPErrorMessageUnknownSubscriberImpl;
 import org.restcomm.protocols.ss7.map.smstpdu.AbsoluteTimeStampImpl;
@@ -23,316 +30,305 @@ import org.restcomm.protocols.ss7.sccp.impl.parameter.NoGlobalTitle;
 import org.restcomm.protocols.ss7.sccp.impl.parameter.SccpAddressImpl;
 import org.restcomm.protocols.ss7.sccp.parameter.EncodingScheme;
 import org.restcomm.protocols.ss7.sccp.parameter.GlobalTitle;
+import org.restcomm.protocols.ss7.sccp.parameter.GlobalTitle0001;
+import org.restcomm.protocols.ss7.sccp.parameter.GlobalTitle0010;
+import org.restcomm.protocols.ss7.sccp.parameter.GlobalTitle0011;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
+import java.util.Arrays;
 import java.util.Calendar;
+import java.util.GregorianCalendar;
+import java.util.stream.Stream;
 
-import static com.paicbd.module.utils.Ss7Utils.AssociationType.CLIENT;
-import static com.paicbd.module.utils.Ss7Utils.AssociationType.SERVER;
-import static com.paicbd.module.utils.Ss7Utils.LayerType.M3UA;
-import static com.paicbd.module.utils.Ss7Utils.LayerType.MAP;
-import static com.paicbd.module.utils.Ss7Utils.LayerType.SCCP;
-import static com.paicbd.module.utils.Ss7Utils.LayerType.SCTP;
-import static com.paicbd.module.utils.Ss7Utils.LayerType.TCAP;
-import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
+
+@ExtendWith(MockitoExtension.class)
 class Ss7UtilsTest {
 
-    //For GlobalTitle Test
-    String digits = "88888888";
+    static final String DIGITS = "88888888";
+    static final int ALLOWED_DELAY_FOR_MIN_OR_SEC = 10;
 
-    int pointCode = 100;
-    int ssn = 8;
+    enum TimeOfCalendar {
+        YEAR,
+        MONTH,
+        DAY,
+        HOUR,
+        MINUTE,
+        SECOND
+    }
+
+    @ParameterizedTest
+    @DisplayName("""
+                getGlobalTitleParameters when digit, natureOfAddress, translationType, numberingPlan, encodingScheme, natureOfAddress
+                 parameters provided then return the global title depending on the gtIndicator
+            """)
+    @MethodSource("getGlobalTitleParameters")
+    void getGlobalTitleWhenGtIndicatorSentThenReturnResponse(String gtIndicator, NatureOfAddress natureOfAddress,
+                        GlobalTitle expectedGlobalTitle, EncodingScheme expectedEncoding) {
+        var result = Ss7Utils.getGlobalTitle(gtIndicator, 0, expectedEncoding,
+                NumberingPlan.ISDN_TELEPHONY, natureOfAddress, DIGITS);
+
+        assertEquals(expectedGlobalTitle, result);
+    }
+
+    @ParameterizedTest
+    @MethodSource("getAbsoluteTimeStampParameters")
+    @DisplayName("getAbsoluteTimeStampImpl when a calendar instance is created then return the date in the AbsoluteTimeStamp type")
+    void getAbsoluteTimeStampImplWhenCalendarInstanceThenReturnAbsoluteTime(TimeOfCalendar value, int expectedDateValue) {
+        AbsoluteTimeStamp result = Ss7Utils.getAbsoluteTimeStampImpl();
+        int timeResult = getTimeOfCalendar(value, result);
+        boolean isValidResult = dateValuesAreTheSame(value, timeResult, expectedDateValue);
+        assertTrue(isValidResult);
+    }
+
+    @ParameterizedTest
+    @MethodSource("epochUtcTimeToAbsoluteParameters")
+    @DisplayName("""
+            epochUtcTimeToAbsoluteTimeStampImpl when provide an epoch formated date via a Long number 
+            Then return the date in the AbsoluteTimeStamp type
+            """)
+    void epochUtcTimeToAbsoluteTimeStampImplWhenEpochThenReturnAbsoluteTime(long inputTime, TimeOfCalendar value, int expectedDateValue) {
+        AbsoluteTimeStamp result = Ss7Utils.epochUtcTimeToAbsoluteTimeStampImpl(inputTime);
+        int timeResult = getTimeOfCalendar(value, result);
+        boolean isValidResult = dateValuesAreTheSame(value, timeResult, expectedDateValue);
+        assertTrue(isValidResult);
+
+    }
+
+    @ParameterizedTest
+    @MethodSource("getMsisdnParameters")
+    @DisplayName("""
+            getMsisdn when a message event is sent to the method then return the corresponding ISDN Address
+            based on the addressNature and the numberingPlan found using the message event object
+            """)
+    void getMsisdnWhenMessageEventSentThenReturnIsdnAddress(Integer addressNature, AddressNature expectedAddressNature,
+                   Integer numberingPlan, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan expectedNumberingPlan) {
+        MessageEvent messageEvent = MessageEvent.builder()
+                .messageId("1")
+                .shortMessage("Test Message")
+                .delReceipt("")
+                .dataCoding(0)
+                .esmClass(3)
+                .sourceAddrTon(1)
+                .numberingPlanMsisdn(numberingPlan)
+                .sourceAddrNpi(1)
+                .destAddrTon(1)
+                .addressNatureMsisdn(addressNature)
+                .destAddrNpi(1)
+                .sourceAddr("1234")
+                .destinationAddr("5678")
+                .build();
+
+        ISDNAddressString result = Ss7Utils.getMsisdn(messageEvent);
+        assertEquals(expectedAddressNature, result.getAddressNature());
+        assertEquals(expectedNumberingPlan, result.getNumberingPlan());
+    }
+
+    @ParameterizedTest
+    @MethodSource("getMapErrorCodeParameters")
+    @DisplayName("""
+            getMapErrorCodeToString when te mapErrorMessage object is passed to the method then return the error code associated
+            looking for the matching value in the errorToString map
+            """)
+    void getMapErrorCodeToStringWhenErrorMessageSentThenReturnTheCode(MAPErrorMessage errorMessage, String expectedErrorCode) {
+        String result = Ss7Utils.getMapErrorCodeToString(errorMessage);
+        assertEquals(expectedErrorCode, result);
+    }
+
+    @ParameterizedTest
+    @MethodSource("createChannelParameters")
+    @DisplayName("""
+            createChannelMessage when the message type is provided
+            then it is associated to a new created ChannelMessage object
+            finally returns the modified channel message
+            """)
+    void createChannelMessageWhenMessageTypeThenReturnChannelMessage(String messageType, String expectedValue) {
+        ChannelMessage result = Ss7Utils.createChannelMessage(messageType);
+        assertEquals(messageType, result.getParameter(expectedValue));
+
+    }
+
+    @ParameterizedTest
+    @MethodSource("checkDataCodingSchemeParameters")
+    @DisplayName("""
+            checkDataCodingSchemeSupport when passing a dcs value then it verifies if:
+            the coding scheme is compressed, if the character set matches with GSM7 or UCS2
+            and based on the validation then return true or false
+            """)
+    void checkDataCodingSchemeSupportWhenDcsSentThenReturnResult(int dcs, boolean expectedValue) {
+        boolean result = Ss7Utils.checkDataCodingSchemeSupport(dcs);
+        assertEquals(result, expectedValue);
+    }
 
     @Test
-    void testPrivateConstructor() throws NoSuchMethodException {
-        Constructor<Ss7Utils> constructor = Ss7Utils.class.getDeclaredConstructor();
-        constructor.setAccessible(true);
-        assertThrows(InvocationTargetException.class, constructor::newInstance);
-    }
+    @DisplayName("""
+            convertToSccpAddress when the globalTitle, the pointCode and the ssn is provided
+            then return a new SccpAddress implementation with it's corresponding global routing indicator
+            """)
+    void convertToSccpAddressWhenParametersSentThenReturnSccpAddress() {
 
-
-    @Test
-    void testGetGlobalTitle001() {
-        String gtIndicator = "GT0001";
-        var natureOfAddress = NatureOfAddress.valueOf(4);
-        var globalTitle0001 = new GlobalTitle0001Impl(digits, natureOfAddress);
-        var result = Ss7Utils.getGlobalTitle(gtIndicator, 0, null, NumberingPlan.ISDN_TELEPHONY, natureOfAddress, digits);
-        assertEquals(globalTitle0001, result);
-    }
-
-    @Test
-    void testGetGlobalTitle0010() {
-        String gtIndicator = "GT0010";
-        int translationType = 0;
-        var globalTitle0010 = new GlobalTitle0010Impl(digits, translationType);
-        var result = Ss7Utils.getGlobalTitle(gtIndicator, translationType, null, NumberingPlan.ISDN_TELEPHONY, NatureOfAddress.UNKNOWN, digits);
-        assertEquals(globalTitle0010, result);
-    }
-
-    @Test
-    void testGetGlobalTitle0011_encodingSchemaBCDOdd() {
-        testGetGlobalTitle0011ByEncoding(1);
-    }
-
-    @Test
-    void testGetGlobalTitle0011_encodingSchemaBCDEven() {
-        testGetGlobalTitle0011ByEncoding(2);
-    }
-
-    @Test
-    void testGetGlobalTitle0011_encodingSchemaDefault() {
-        testGetGlobalTitle0011ByEncoding(3);
-    }
-
-    private void testGetGlobalTitle0011ByEncoding(int encodingSchemeType) {
-        String gtIndicator = "GT0011";
-        int translationType = 0;
-        var numberingPlan = NumberingPlan.valueOf(1);
-        EncodingScheme encodingScheme = switch (encodingSchemeType) {
-            case 1 -> new BCDOddEncodingScheme();
-            case 2 -> new BCDEvenEncodingScheme();
-            default -> new DefaultEncodingScheme();
-        };
-        var globalTitle0011 = new GlobalTitle0011Impl(digits, translationType, encodingScheme, numberingPlan);
-        var result = Ss7Utils.getGlobalTitle(gtIndicator, translationType, encodingScheme, numberingPlan, NatureOfAddress.UNKNOWN, digits);
-        assertEquals(globalTitle0011, result);
-    }
-
-    @Test
-    void testGetGlobalTitle0100_encodingSchemaBCDOdd() {
-        testGetGlobalTitle0100ByEncoding(1);
-    }
-
-    @Test
-    void testGetGlobalTitle0100_encodingSchemaBCDEven() {
-        testGetGlobalTitle0100ByEncoding(2);
-    }
-
-    @Test
-    void testGetGlobalTitle0100_encodingSchemaDefault() {
-        testGetGlobalTitle0100ByEncoding(3);
-
-    }
-
-    private void testGetGlobalTitle0100ByEncoding(int encodingSchemeType) {
-        String gtIndicator = "GT0100";
-        int translationType = 0;
-        var numberingPlan = NumberingPlan.valueOf(1);
-        var natureOfAddress = NatureOfAddress.valueOf(4);
-        EncodingScheme encodingScheme = switch (encodingSchemeType) {
-            case 1 -> new BCDOddEncodingScheme();
-            case 2 -> new BCDEvenEncodingScheme();
-            default -> new DefaultEncodingScheme();
-        };
-        var globalTitle0100 = new GlobalTitle0100Impl(digits, translationType, encodingScheme, numberingPlan, natureOfAddress);
-        var result = Ss7Utils.getGlobalTitle(gtIndicator, translationType, encodingScheme, numberingPlan, natureOfAddress, digits);
-        assertEquals(globalTitle0100, result);
-    }
-
-    @Test
-    void testGetGlobalTitleDefault() {
-        String gtIndicator = "DEFAULT";
+        int pointCode = 100;
+        int ssn = 8;
+        int natureOfAddress = 4;
+        String digits = "1000";
         var noGlobalTitle = new NoGlobalTitle(digits);
-        var result = Ss7Utils.getGlobalTitle(gtIndicator, 0, null, NumberingPlan.ISDN_TELEPHONY, NatureOfAddress.UNKNOWN, digits);
-        assertEquals(noGlobalTitle, result);
-    }
+        int translationType = 0;
 
-    @Test
-    void testConvertToSccpAddress_GlobalTitle001() {
-        int natureOfAddress = 4;
+
+        var sccpAddress = new SccpAddressImpl(RoutingIndicator.ROUTING_BASED_ON_GLOBAL_TITLE, noGlobalTitle, pointCode, ssn);
+        var result = Ss7Utils.convertToSccpAddress(noGlobalTitle, pointCode, ssn);
+        assertEquals(sccpAddress, result);
+
         var globalTitle0001 = new GlobalTitle0001Impl(digits, NatureOfAddress.valueOf(natureOfAddress));
-        testConvertToSccpAddressByGtIndicator(globalTitle0001);
-    }
+        var sccpAddress2 = new SccpAddressImpl(RoutingIndicator.ROUTING_BASED_ON_GLOBAL_TITLE, globalTitle0001, pointCode, ssn);
+        var result2 = Ss7Utils.convertToSccpAddress(globalTitle0001, pointCode, ssn);
+        assertEquals(sccpAddress2, result2);
 
-    @Test
-    void testConvertToSccpAddress_GlobalTitle0010() {
-        int translationType = 0;
-        var globalTitle0010 = new GlobalTitle0010Impl(digits, translationType);
-        testConvertToSccpAddressByGtIndicator(globalTitle0010);
-    }
-
-    @Test
-    void testConvertToSccpAddress_GlobalTitle0011() {
-        int translationType = 0;
-        int numberingPlan = 1;
-        var globalTitle0011 = new GlobalTitle0011Impl(digits, translationType, new BCDOddEncodingScheme(), NumberingPlan.valueOf(numberingPlan));
-        testConvertToSccpAddressByGtIndicator(globalTitle0011);
-
-    }
-
-    @Test
-    void testConvertToSccpAddress_GlobalTitle0100() {
-        int translationType = 0;
-        int numberingPlan = 1;
-        int natureOfAddress = 4;
         var globalTitle0100 = new GlobalTitle0100Impl(
                 digits, translationType, new BCDOddEncodingScheme(),
-                NumberingPlan.valueOf(numberingPlan), NatureOfAddress.valueOf(natureOfAddress));
-        testConvertToSccpAddressByGtIndicator(globalTitle0100);
+                NumberingPlan.ISDN_TELEPHONY, NatureOfAddress.valueOf(natureOfAddress));
+
+        var sccpAddress3 = new SccpAddressImpl(RoutingIndicator.ROUTING_BASED_ON_GLOBAL_TITLE, globalTitle0100, pointCode, ssn);
+        var result3 = Ss7Utils.convertToSccpAddress(globalTitle0100, pointCode, ssn);
+        assertEquals(sccpAddress3, result3);
     }
 
-    @Test
-    void testConvertToSccpAddress_GlobalTitleDefault() {
-        var noGlobalTitle = new NoGlobalTitle(digits);
-        testConvertToSccpAddressByGtIndicator(noGlobalTitle);
+    @ParameterizedTest
+    @MethodSource("toCalendarParameters")
+    @DisplayName("""
+            toCalendar when the absoluteTimeStamp formatted date is passes to the method
+            then return a date based on a Calendar instance from years to millis
+            """)
+    void toCalendarWhenAbsoluteDateProvidedThenReturnCalendar(AbsoluteTimeStamp absoluteTimeStamp, TimeOfCalendar value, int expectedDateValue) {
+        Calendar result = Ss7Utils.toCalendar(absoluteTimeStamp);
+        int timeResult = getTimeOfCalendar(value, result);
+        boolean isValidResult = dateValuesAreTheSame(value, timeResult, expectedDateValue);
+        assertTrue(isValidResult);
     }
 
-    private void testConvertToSccpAddressByGtIndicator(GlobalTitle globalTitle) {
-        var sccpAddress = new SccpAddressImpl(RoutingIndicator.ROUTING_BASED_ON_GLOBAL_TITLE, globalTitle, pointCode, ssn);
-        var result = Ss7Utils.convertToSccpAddress(globalTitle, pointCode, ssn);
-        assertEquals(sccpAddress, result);
+    static Stream<Arguments> getGlobalTitleParameters() {
+        NatureOfAddress natureOfAddress04 = NatureOfAddress.valueOf(4);
+        NumberingPlan numberingPlan01 = NumberingPlan.valueOf(1);
+        BCDOddEncodingScheme bcodEncoding = new BCDOddEncodingScheme();
+        BCDEvenEncodingScheme bcdeEncoding = new BCDEvenEncodingScheme();
+        DefaultEncodingScheme defaultEncoding = new DefaultEncodingScheme();
+
+        GlobalTitle0001 globalTitle0001 = new GlobalTitle0001Impl(DIGITS, natureOfAddress04);
+        GlobalTitle0010 globalTitle0010 = new GlobalTitle0010Impl(DIGITS, 0);
+        GlobalTitle0011 globalTitle0011Encoding1 = new GlobalTitle0011Impl(DIGITS, 0, bcodEncoding, numberingPlan01);
+        GlobalTitle0011 globalTitle0011Encoding2 = new GlobalTitle0011Impl(DIGITS, 0, bcdeEncoding, numberingPlan01);
+        GlobalTitle0011 globalTitle0011Encoding3 = new GlobalTitle0011Impl(DIGITS, 0, defaultEncoding, numberingPlan01);
+        GlobalTitle0100Impl globalTitle0100Encoding1 = new GlobalTitle0100Impl(DIGITS, 0, bcodEncoding, numberingPlan01, NatureOfAddress.INTERNATIONAL);
+        GlobalTitle0100Impl globalTitle0100Encoding2 = new GlobalTitle0100Impl(DIGITS, 0, bcdeEncoding, numberingPlan01, NatureOfAddress.INTERNATIONAL);
+        GlobalTitle0100Impl globalTitle0100Encoding3 = new GlobalTitle0100Impl(DIGITS, 0, defaultEncoding, numberingPlan01, NatureOfAddress.INTERNATIONAL);
+        NoGlobalTitle noGlobalTitle = new NoGlobalTitle(DIGITS);
+
+        return Stream.of(
+                Arguments.of("GT0001", natureOfAddress04, globalTitle0001, null),
+                Arguments.of("GT0010", NatureOfAddress.UNKNOWN, globalTitle0010, null),
+                Arguments.of("GT0011", NatureOfAddress.UNKNOWN, globalTitle0011Encoding1, bcodEncoding),
+                Arguments.of("GT0011", NatureOfAddress.UNKNOWN, globalTitle0011Encoding2, bcdeEncoding),
+                Arguments.of("GT0011", NatureOfAddress.UNKNOWN, globalTitle0011Encoding3, defaultEncoding),
+                Arguments.of("GT0100", NatureOfAddress.INTERNATIONAL, globalTitle0100Encoding1, bcodEncoding),
+                Arguments.of("GT0100", NatureOfAddress.INTERNATIONAL, globalTitle0100Encoding2, bcdeEncoding),
+                Arguments.of("GT0100", NatureOfAddress.INTERNATIONAL, globalTitle0100Encoding3, defaultEncoding),
+                Arguments.of("DEFAULT", NatureOfAddress.UNKNOWN, noGlobalTitle, defaultEncoding)
+        );
     }
 
-    @Test
-    void testGetAbsoluteTimeStampImpl() {
-        var resultTime = Ss7Utils.getAbsoluteTimeStampImpl();
-        assertInstanceOf(AbsoluteTimeStampImpl.class, resultTime);
+    static Stream<Arguments> getAbsoluteTimeStampParameters() {
+        return Stream.of(
+                Arguments.of(TimeOfCalendar.YEAR, (GregorianCalendar.getInstance().get(Calendar.YEAR)) - 2000),
+                Arguments.of(TimeOfCalendar.MONTH, (GregorianCalendar.getInstance().get(Calendar.MONTH)) + 1),
+                Arguments.of(TimeOfCalendar.DAY, (GregorianCalendar.getInstance().get(Calendar.DAY_OF_MONTH))),
+                Arguments.of(TimeOfCalendar.HOUR, (GregorianCalendar.getInstance().get(Calendar.HOUR))),
+                Arguments.of(TimeOfCalendar.MINUTE, (GregorianCalendar.getInstance().get(Calendar.MINUTE))),
+                Arguments.of(TimeOfCalendar.SECOND, (GregorianCalendar.getInstance().get(Calendar.SECOND)))
+        );
     }
 
-    @Test
-    void testEpochUtcTimeToAbsoluteTimeStampImpl() {
-        //UTC Date: 2024-06-17
-        long epochTime = 1721228701656L;
-        var resultTime = Ss7Utils.epochUtcTimeToAbsoluteTimeStampImpl(epochTime);
-        assertEquals(24, resultTime.getYear());
-        assertEquals(6, resultTime.getMonth());
-        assertEquals(17, resultTime.getDay());
-
+    static Stream<Arguments> epochUtcTimeToAbsoluteParameters() {
+        return Stream.of(
+                Arguments.of(1622845633000L, TimeOfCalendar.YEAR, 21),
+                Arguments.of(1541370433000L, TimeOfCalendar.MONTH, 11)
+        );
     }
 
-    @Test
-    void testCalendar() {
-        var absoluteTimeStamp = Ss7Utils.getAbsoluteTimeStampImpl();
-        var resultTime = Ss7Utils.toCalendar(absoluteTimeStamp);
-        assertInstanceOf(Calendar.class, resultTime);
-        assertEquals(absoluteTimeStamp.getYear(), resultTime.get(Calendar.YEAR));
-        assertEquals(absoluteTimeStamp.getMonth(), resultTime.get(Calendar.MONTH) + 1);
-        assertEquals(absoluteTimeStamp.getDay(), resultTime.get(Calendar.DAY_OF_MONTH));
-        assertEquals(absoluteTimeStamp.getHour(), resultTime.get(Calendar.HOUR_OF_DAY));
-        assertEquals(absoluteTimeStamp.getMinute(), resultTime.get(Calendar.MINUTE));
-        assertEquals(absoluteTimeStamp.getSecond(), resultTime.get(Calendar.SECOND));
+    static Stream<Arguments> getMsisdnParameters() {
+        return Stream.of(
+                Arguments.of(null, AddressNature.unknown, null, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.unknown),
+                Arguments.of(1, AddressNature.international_number, 1, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.ISDN),
+                Arguments.of(2, AddressNature.national_significant_number, 1, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.ISDN),
+                Arguments.of(3, AddressNature.network_specific_number, 1, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.ISDN),
+                Arguments.of(6, AddressNature.abbreviated_number, 1, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.ISDN),
+                Arguments.of(1, AddressNature.international_number, 6, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.land_mobile),
+                Arguments.of(1, AddressNature.international_number, 8, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.national),
+                Arguments.of(1, AddressNature.international_number, 9, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.private_plan)
+        );
     }
 
-    @Test
-    void testCheckDataCodingSchemeSupport() {
-        assertTrue(Ss7Utils.checkDataCodingSchemeSupport(0));//GSM7
-        assertTrue(Ss7Utils.checkDataCodingSchemeSupport(1));//GSM7
-        assertTrue(Ss7Utils.checkDataCodingSchemeSupport(2));//UCS2
+    static Stream<Arguments> getMapErrorCodeParameters() {
 
-        assertFalse(Ss7Utils.checkDataCodingSchemeSupport(15));
+        return Stream.of(
+                Arguments.of(new MAPErrorMessageSystemFailureImpl(), "System Failure"),
+                Arguments.of(new MAPErrorMessageUnknownSubscriberImpl(), "Unknown Subscriber"),
+                Arguments.of(null, "System Failure")
+        );
     }
 
-
-    @Test
-    void testGetMapErrorCodeToString() {
-        assertEquals("System Failure", Ss7Utils.getMapErrorCodeToString(new MAPErrorMessageSystemFailureImpl()));
-        assertEquals("Unknown Subscriber", Ss7Utils.getMapErrorCodeToString(new MAPErrorMessageUnknownSubscriberImpl()));
-        assertEquals("System Failure", Ss7Utils.getMapErrorCodeToString(null));
-
+    static Stream<Arguments> createChannelParameters() {
+        return Stream.of(
+                Arguments.of(Constants.DIALOG, "messageType"),
+                Arguments.of(null, null)
+        );
     }
 
-    @Test
-    void testEnumValuesOfLayerType() {
-        Ss7Utils.LayerType[] expectedValues = {
-                SCTP, M3UA, SCCP, TCAP, MAP
+    static Stream<Arguments> checkDataCodingSchemeParameters() {
+        return Stream.of(
+                Arguments.of(0, Boolean.TRUE),
+                Arguments.of(1, Boolean.TRUE),
+                Arguments.of(2, Boolean.TRUE),
+                Arguments.of('a', Boolean.FALSE),
+                Arguments.of('c', Boolean.FALSE)
+        );
+    }
+
+    static Stream<Arguments> toCalendarParameters() {
+        AbsoluteTimeStamp absoluteTimeStamp = new AbsoluteTimeStampImpl(2024, 11, 2, 11, 25, 24, 5);
+        return Stream.of(
+                Arguments.of(absoluteTimeStamp, TimeOfCalendar.YEAR, absoluteTimeStamp.getYear()),
+                Arguments.of(absoluteTimeStamp, TimeOfCalendar.MONTH, absoluteTimeStamp.getMonth()),
+                Arguments.of(absoluteTimeStamp, TimeOfCalendar.DAY, absoluteTimeStamp.getDay())
+        );
+    }
+
+    private int getTimeOfCalendar(TimeOfCalendar time, AbsoluteTimeStamp result) {
+        return switch (time) {
+            case TimeOfCalendar.YEAR -> result.getYear();
+            case TimeOfCalendar.MONTH -> result.getMonth();
+            case TimeOfCalendar.DAY -> result.getDay();
+            case TimeOfCalendar.HOUR -> result.getHour();
+            case TimeOfCalendar.MINUTE -> result.getMinute();
+            case TimeOfCalendar.SECOND -> result.getSecond();
         };
-        assertArrayEquals(expectedValues, Ss7Utils.LayerType.values());
     }
 
-    @Test
-    void testEnumValuesOfAssociationType() {
-        Ss7Utils.AssociationType[] expectedValues = {
-                CLIENT, SERVER
+    private int getTimeOfCalendar(TimeOfCalendar time, Calendar result) {
+        return switch (time) {
+            case TimeOfCalendar.YEAR -> result.get(Calendar.YEAR);
+            case TimeOfCalendar.MONTH -> result.get(Calendar.MONTH) + 1;
+            case TimeOfCalendar.DAY -> result.get(Calendar.DAY_OF_MONTH);
+            case TimeOfCalendar.HOUR -> result.get(Calendar.HOUR_OF_DAY);
+            case TimeOfCalendar.MINUTE -> result.get(Calendar.MINUTE);
+            case TimeOfCalendar.SECOND -> result.get(Calendar.SECOND);
         };
-        assertArrayEquals(expectedValues, Ss7Utils.AssociationType.values());
     }
 
-    @Test
-    void testGetMessage() {
-        var channelMessage = Ss7Utils.getMessage(Constants.DIALOG);
-        assertNotNull(channelMessage.getOriginId());
-        assertNotNull(channelMessage.getTransactionId());
-        assertEquals(Constants.DIALOG, channelMessage.getParameter(Constants.MESSAGE_TYPE));
+    private boolean dateValuesAreTheSame(TimeOfCalendar timeOfCalendar, int timeResult, int expectedDateValue) {
+        boolean evaluateDelay = Arrays.asList(TimeOfCalendar.MINUTE, TimeOfCalendar.SECOND).contains(timeOfCalendar);
+        return evaluateDelay ?
+                (Math.abs(timeResult - expectedDateValue) < ALLOWED_DELAY_FOR_MIN_OR_SEC) :
+                (timeResult == expectedDateValue);
     }
-
-    @Test
-    void testGetMsisdnWithDefaultValues() {
-        var message = MessageUtil.getMessageEvent();
-        message.setAddressNatureMsisdn(null);
-        message.setNumberingPlanMsisdn(null);
-        var msisdn = Ss7Utils.getMsisdn(message);
-        assertEquals(AddressNature.unknown, msisdn.getAddressNature());
-        assertEquals(org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.unknown,
-                msisdn.getNumberingPlan());
-    }
-
-    @Test
-    void testGetMsisdn() {
-        var message = MessageUtil.getMessageEvent();
-        message.setAddressNatureMsisdn(1);
-        message.setNumberingPlanMsisdn(1);
-        var msisdn = Ss7Utils.getMsisdn(message);
-        assertEquals(AddressNature.international_number, msisdn.getAddressNature());
-        assertEquals(org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.ISDN,
-                msisdn.getNumberingPlan());
-    }
-
-    @Test
-    void testCustomNumberingPlanIndicator() {
-        assertAll("FromSmsc",
-                () -> assertEquals(CustomNumberingPlanIndicator.ISDN, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.ISDN.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.UNKNOWN, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.UNKNOWN.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.DATA, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.DATA.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.TELEX, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.TELEX.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.LAND_MOBILE, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.LAND_MOBILE.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.NATIONAL, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.NATIONAL.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.PRIVATE, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.PRIVATE.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.ERMES, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.ERMES.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.INTERNET, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.INTERNET.value())),
-                () -> assertEquals(CustomNumberingPlanIndicator.WAP, CustomNumberingPlanIndicator.fromSmsc(NumberingPlanIndicator.WAP.value()))
-        );
-
-        assertAll("FromSmsTpdu",
-                () -> assertEquals(CustomNumberingPlanIndicator.ISDN, CustomNumberingPlanIndicator.fromSmsTpdu(NumberingPlanIdentification.ISDNTelephoneNumberingPlan)),
-                () -> assertEquals(CustomNumberingPlanIndicator.UNKNOWN, CustomNumberingPlanIndicator.fromSmsTpdu(NumberingPlanIdentification.Reserved))
-        );
-
-        assertAll("FromPrimitive",
-                () -> assertEquals(CustomNumberingPlanIndicator.ISDN, CustomNumberingPlanIndicator.fromPrimitive(org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.ISDN)),
-                () -> assertEquals(CustomNumberingPlanIndicator.UNKNOWN, CustomNumberingPlanIndicator.fromPrimitive(org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.reserved))
-        );
-    }
-
-    @Test
-    void testCustomTypeOfNumber() {
-        assertAll("FromSmsc",
-                () -> assertEquals(CustomTypeOfNumber.INTERNATIONAL, CustomTypeOfNumber.fromSmsc(TypeOfNumber.INTERNATIONAL.value())),
-                () -> assertEquals(CustomTypeOfNumber.UNKNOWN, CustomTypeOfNumber.fromSmsc(TypeOfNumber.UNKNOWN.value())),
-                () -> assertEquals(CustomTypeOfNumber.NATIONAL, CustomTypeOfNumber.fromSmsc(TypeOfNumber.NATIONAL.value())),
-                () -> assertEquals(CustomTypeOfNumber.NETWORK_SPECIFIC, CustomTypeOfNumber.fromSmsc(TypeOfNumber.NETWORK_SPECIFIC.value())),
-                () -> assertEquals(CustomTypeOfNumber.SUBSCRIBER_NUMBER, CustomTypeOfNumber.fromSmsc(TypeOfNumber.SUBSCRIBER_NUMBER.value())),
-                () -> assertEquals(CustomTypeOfNumber.ALPHANUMERIC, CustomTypeOfNumber.fromSmsc(TypeOfNumber.ALPHANUMERIC.value())),
-                () -> assertEquals(CustomTypeOfNumber.ABBREVIATED, CustomTypeOfNumber.fromSmsc(TypeOfNumber.ABBREVIATED.value()))
-        );
-
-        assertAll("FromSmsTpdu",
-                () -> assertEquals(CustomTypeOfNumber.INTERNATIONAL, CustomTypeOfNumber.fromSmsTpdu(org.restcomm.protocols.ss7.map.api.smstpdu.TypeOfNumber.InternationalNumber)),
-                () -> assertEquals(CustomTypeOfNumber.UNKNOWN, CustomTypeOfNumber.fromSmsTpdu(org.restcomm.protocols.ss7.map.api.smstpdu.TypeOfNumber.Reserved))
-        );
-
-        assertAll("FromPrimitive",
-                () -> assertEquals(CustomTypeOfNumber.INTERNATIONAL, CustomTypeOfNumber.fromPrimitive(AddressNature.international_number)),
-                () -> assertEquals(CustomTypeOfNumber.UNKNOWN, CustomTypeOfNumber.fromPrimitive(AddressNature.reserved_for_extension))
-        );
-    }
-
 }

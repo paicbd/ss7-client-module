@@ -1,5 +1,6 @@
 package com.paicbd.module.utils;
 
+import com.paicbd.smsc.exception.RTException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -19,27 +20,36 @@ public class ExtendedResource {
 
     private final AppProperties appProperties;
 
-    public String createDirectory(String name) throws IOException {
-        String pathData = getDirectoryPath() + name;
-        Path path = Paths.get(pathData);
-        Files.createDirectories(path);
-        return pathData;
+    public String createDirectory(String name) {
+        try {
+            String pathData = getDirectoryPath() + name;
+            Path path = Paths.get(pathData);
+            Files.createDirectories(path);
+            return pathData;
+        } catch (Exception e) {
+            log.error("Error while creating directory: {}", e.getMessage());
+            throw new RTException("Error while creating directory");
+        }
     }
 
-
-    public void deleteDirectory(File directory) throws IOException {
-        if (directory.exists()) {
-            if (directory.isFile()) {
-                deleteFile(directory.getPath());
-            } else {
-                File[] listFiles = directory.listFiles();
-                if (listFiles != null) {
-                    for (File file : listFiles) {
-                        deleteFile(file.getPath());
+    public void deleteDirectory(File directory) {
+        try {
+            if (directory.exists()) {
+                if (directory.isFile()) {
+                    deleteFile(directory.getPath());
+                } else {
+                    File[] listFiles = directory.listFiles();
+                    if (listFiles != null) {
+                        for (File file : listFiles) {
+                            deleteFile(file.getPath());
+                        }
                     }
+                    deleteFile(directory.getPath());
                 }
-                deleteFile(directory.getPath());
             }
+        } catch (Exception e) {
+            log.error("Error while deleting directory: {}", e.getMessage());
+            throw new RTException("Error while deleting directory");
         }
     }
 
@@ -56,5 +66,4 @@ public class ExtendedResource {
         }
         return appProperties.getConfigPath();
     }
-
 }

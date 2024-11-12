@@ -74,7 +74,6 @@ public class TcapLayer implements ILayer {
             log.error("Exception when starting TCAP Layer '{}'. ", this.getName(), e);
             throw new RTException("Exception when starting TCAP Layer", e);
         }
-
     }
 
     @Override

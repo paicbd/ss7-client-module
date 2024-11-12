@@ -18,8 +18,8 @@ public class MapLayer implements ILayer {
     private final MAPProvider provider;
 
     //Listeners
-    private MapDialogListener mapDialogListener;
     private MapSmsListener mapSmsListener;
+    private MapDialogListener mapDialogListener;
 
 
     public MAPProvider getMapProvider() {
@@ -72,8 +72,8 @@ public class MapLayer implements ILayer {
 
     public void setChannelHandler(IChannelHandler channelHandler) {
         log.info("Starting the Map Listeners");
-        this.mapDialogListener = new MapDialogListener(channelHandler);
         this.mapSmsListener = new MapSmsListener(channelHandler);
+        this.mapDialogListener = new MapDialogListener(channelHandler);
         this.provider.addMAPDialogListener(this.mapDialogListener);
         this.provider.getMAPServiceSms().addMAPServiceListener(this.mapSmsListener);
         this.provider.getMAPServiceSms().activate();

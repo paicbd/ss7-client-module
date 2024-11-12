@@ -12,6 +12,7 @@ import com.paicbd.smsc.cdr.CdrProcessor;
 import com.paicbd.smsc.dto.ErrorCodeMapping;
 import com.paicbd.smsc.dto.MessageEvent;
 import com.paicbd.smsc.utils.Converter;
+import com.paicbd.smsc.utils.RequestDelivery;
 import com.paicbd.smsc.utils.UtilsEnum;
 import com.paicbd.smsc.utils.Watcher;
 import lombok.extern.slf4j.Slf4j;
@@ -259,7 +260,7 @@ public class MessageProcessing {
             messageTypeCdr = UtilsEnum.MessageType.DELIVER;
         }
         this.processCdr(sent, messageTypeCdr, UtilsEnum.CdrStatus.SENT, "", true);
-        if ((!sent.isDlr()) &&  (sent.getRegisteredDelivery() == 1) ) {
+        if ((!sent.isDlr()) &&  (sent.getRegisteredDelivery() == RequestDelivery.REQUEST_DLR.getValue()) ) {
             this.prepareAndSendDlr(sent, null, null);
         }
     }
@@ -279,9 +280,8 @@ public class MessageProcessing {
                         log.debug("Received SMS_SUBMIT = {}", smsSubmitTpdu);
                         this.processMoSmsSubmit(moForwardShortMessageRequestIndication, smsSubmitTpdu);
                     },
-                    SmsTpduType.SMS_DELIVER_REPORT, smsTpdu -> log.warn("Received SMS_DELIVER_REPORT this message will not process {}", smsTpdu),
-                    SmsTpduType.SMS_COMMAND, smsTpdu -> log.warn("Received SMS_COMMAND this message will not process {}", smsTpdu),
-                    SmsTpduType.SMS_DELIVER, smsTpdu -> log.warn("Received SMS_DELIVER this message will not process {}", smsTpdu)
+                    SmsTpduType.SMS_DELIVER_REPORT, smsTpdu -> log.warn("Received SMS_DELIVER_REPORT this message will not be processed {}", smsTpdu),
+                    SmsTpduType.SMS_COMMAND, smsTpdu -> log.warn("Received SMS_COMMAND this message will not be processed {}", smsTpdu)
             );
 
             Optional.ofNullable(smsTpduProcessors.get(smsTpduDecoded.getSmsTpduType()))
@@ -329,8 +329,7 @@ public class MessageProcessing {
             hashMessage.forEach((keyHash, value) -> {
                 try {
                     log.debug("Processing message {}", value);
-                    MessageEvent message = Converter.stringToObject(value, new TypeReference<>() {
-                    });
+                    MessageEvent message = Converter.stringToObject(value, MessageEvent.class);
                     executorService.submit(() -> this.sendMessage(message));
                     jedisCluster.hdel(key, keyHash);
                 } catch (Exception e) {
@@ -397,7 +396,7 @@ public class MessageProcessing {
 
     private void processErrorComponent(MAPDialog mapDialog, MAPErrorMessage mapErrorMessage) {
         MAPApplicationContextName mapApplicationContextName = mapDialog.getApplicationContext().getApplicationContextName();
-        if (mapApplicationContextName == MAPApplicationContextName.shortMsgMTRelayContext) {
+        if ((mapApplicationContextName == MAPApplicationContextName.shortMsgMTRelayContext) || (mapApplicationContextName == MAPApplicationContextName.shortMsgGatewayContext)) {
             MessageEvent message = this.removeMessageFromConcurrentHashMaps(mapDialog.getLocalDialogId());
             if (message == null) {
                 log.error("No message found for dialog ID {} in the ConcurrentHashMaps", mapDialog.getLocalDialogId());
@@ -440,7 +439,8 @@ public class MessageProcessing {
         } else {
             log.warn("The error received is temporary and no networkIdToRerouteTemp is defined on the message, we will try to send the message again to the same networkId");
             boolean isAbsentSubscriber = isAbsentSubscriberError(mapErrorMessage);
-            this.sendReportSMDeliveryStatusRequest(message, isAbsentSubscriber);
+            if (message.getValidityPeriod() > 0 && !message.isLastRetry())
+                this.sendReportSMDeliveryStatusRequest(message, isAbsentSubscriber);
             executorService.submit(() -> this.sendToRetry(mapErrorMessage, message));
         }
     }
@@ -456,16 +456,22 @@ public class MessageProcessing {
 
     private void sendToRetry(MAPErrorMessage mapErrorMessage, MessageEvent message) {
         try {
-            log.info("Starting auto retry process for message_id {}", message.getMessageId());
+            log.warn("Starting auto retry validation process for message_id {}", message.getMessageId());
             message.setRetryNumber(Objects.isNull(message.getRetryNumber()) ? 1 : message.getRetryNumber() + 1);
             message.setNetworkNotifyError(true);
             message.setRetry(true);
 
+            if (message.getValidityPeriod() == 0) {
+                log.warn("The message with messageId {} won't be retried because the validity period is 0", message.getMessageId());
+                this.prepareAndSendDlr(message, Math.toIntExact(mapErrorMessage.getErrorCode()), null);
+                return;
+            }
+
             if (message.isLastRetry()) {
-                log.info("Is Last Retry for message {}, preparing and sending DLR from sendToRetryProcess", message.getId());
+                log.warn("Is Last Retry for message {}, preparing and sending DLR from sendToRetryProcess", message.getId());
                 this.prepareAndSendDlr(message, Math.toIntExact(mapErrorMessage.getErrorCode()), null);
             } else {
-                log.info("Retry number {} for message: {}", message.getRetryNumber(), message);
+                log.warn("Retry number {} for message: {}", message.getRetryNumber(), message);
                 processCdr(message,
                         UtilsEnum.MessageType.MESSAGE,
                         UtilsEnum.CdrStatus.RETRY,
