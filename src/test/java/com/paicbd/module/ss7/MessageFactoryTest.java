@@ -1,8 +1,7 @@
 package com.paicbd.module.ss7;
 
 import com.paicbd.module.dto.Gateway;
-import com.paicbd.module.ss7.layer.impl.GatewayUtil;
-import com.paicbd.module.ss7.layer.impl.MessageUtil;
+import com.paicbd.module.utils.MessageUtil;
 import com.paicbd.module.ss7.layer.impl.channel.MapChannel;
 import com.paicbd.module.ss7.layer.impl.network.LayerFactory;
 import com.paicbd.module.ss7.layer.impl.network.layers.M3uaLayer;
@@ -11,18 +10,24 @@ import com.paicbd.module.ss7.layer.impl.network.layers.SccpLayer;
 import com.paicbd.module.ss7.layer.impl.network.layers.SctpLayer;
 import com.paicbd.module.ss7.layer.impl.network.layers.TcapLayer;
 import com.paicbd.module.utils.AppProperties;
+import com.paicbd.module.utils.CustomNumberingPlanIndicator;
+import com.paicbd.module.utils.CustomTypeOfNumber;
 import com.paicbd.module.utils.ExtendedResource;
+import com.paicbd.module.utils.GatewayCreator;
 import com.paicbd.module.utils.Ss7Utils;
 import com.paicbd.smsc.dto.ErrorCodeMapping;
 import com.paicbd.smsc.dto.MessageEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.restcomm.protocols.ss7.map.api.MAPException;
+import org.restcomm.protocols.ss7.map.api.primitives.ISDNAddressString;
 import org.restcomm.protocols.ss7.map.api.service.sms.MAPDialogSms;
 import org.restcomm.protocols.ss7.map.api.service.sms.MoForwardShortMessageRequest;
 import org.restcomm.protocols.ss7.map.api.service.sms.SmsSignalInfo;
@@ -31,7 +36,8 @@ import org.restcomm.protocols.ss7.map.api.smstpdu.SmsTpdu;
 import org.restcomm.protocols.ss7.map.api.smstpdu.ValidityPeriodFormat;
 
 import java.io.File;
-import java.io.IOException;
+import java.util.List;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -42,29 +48,33 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class MessageFactoryTest {
 
-    Gateway ss7Gateway = GatewayUtil.getGateway(2080, 2090);
-
     @Mock
     AppProperties appProperties;
 
-    @InjectMocks
+    @Mock
     MapChannel mapChannel;
 
-    @InjectMocks
     ExtendedResource extendedResource;
 
-
     String path;
+
     SctpLayer sctpLayer;
+
     M3uaLayer m3uaLayer;
+
     SccpLayer sccpLayer;
+
     TcapLayer tcapLayer;
+
     MapLayer mapLayer;
+
     MessageFactory messageFactory;
 
     @BeforeEach
-    void setUp() throws IOException {
+    void setUp() {
+        Gateway ss7Gateway = GatewayCreator.buildSS7Gateway("ss7gwSCTP", 1, 4);
         when(appProperties.getConfigPath()).thenReturn("");
+        extendedResource = new ExtendedResource(appProperties);
         path = extendedResource.createDirectory(ss7Gateway.getName());
         sctpLayer = (SctpLayer) LayerFactory.createLayerInstance(ss7Gateway.getName() + "-SCTP", Ss7Utils.LayerType.SCTP, ss7Gateway, path);
         m3uaLayer = (M3uaLayer) LayerFactory.createLayerInstance(ss7Gateway.getName() + "-M3UA", Ss7Utils.LayerType.M3UA, ss7Gateway, path, sctpLayer);
@@ -72,12 +82,11 @@ class MessageFactoryTest {
         tcapLayer = (TcapLayer) LayerFactory.createLayerInstance(ss7Gateway.getName() + "-TCAP", Ss7Utils.LayerType.TCAP, ss7Gateway, path, sccpLayer);
         mapLayer = (MapLayer) LayerFactory.createLayerInstance(ss7Gateway.getName() + "-MAP", Ss7Utils.LayerType.MAP, ss7Gateway, path, tcapLayer);
         messageFactory = new MessageFactory(mapLayer);
-        mapChannel.channelInitialize(mapLayer);
         mapLayer.setChannelHandler(mapChannel);
     }
 
     @AfterEach
-    void tearDown() throws IOException {
+    void tearDown() {
         extendedResource.deleteDirectory(new File(path));
     }
 
@@ -98,28 +107,270 @@ class MessageFactoryTest {
     }
 
     @Test
-    void testCreateSendRoutingInfoForSMRequestFromMessageEvent() throws MAPException {
-        startLayers();
-        MessageEvent messageEvent = MessageUtil.getMessageEvent();
+    @DisplayName("Create SRIForSM Request From Message Event When Has Message Event Then It Creates Map Dialog Sms")
+    void createSendRoutingInfoForSMRequestFromMessageEventWhenHasMessageEventThenItCreatesMapDialogSms() throws MAPException {
+        this.startLayers();
+        MessageEvent messageEvent = MessageEvent.builder()
+                .id("1722446896082-12194920127675")
+                .messageId("1722446896081-12194920043917")
+                .systemId("smpp_sp")
+                .sourceAddr("8888")
+                .destinationAddr("1234")
+                .shortMessage("Hello!")
+                .originNetworkId(3)
+                .originNetworkType("SP")
+                .originProtocol("SMPP")
+                .destNetworkType("GW")
+                .destProtocol("SS7")
+                .destNetworkId(5)
+                .sourceAddrTon(1)
+                .sourceAddrNpi(4)
+                .destAddrTon(1)
+                .destAddrNpi(4)
+                .routingId(1)
+                .translationType(0)
+                .globalTitle("2222")
+                .globalTitleIndicator("GT0100")
+                .msisdn("1234")
+                .mscSsn(8)
+                .hlrSsn(6)
+                .smscSsn(8)
+                .validityPeriod(120)
+                .mapVersion(3)
+                .networkIdToMapSri(-1)
+                .networkIdToPermanentFailure(-1)
+                .networkIdTempFailure(-1)
+                .build();
         var sriMessage = this.messageFactory.createSendRoutingInfoForSMRequestFromMessageEvent(messageEvent);
         assertNotNull(sriMessage);
-        assertEquals(3, sriMessage.getApplicationContext().getApplicationContextVersion().getVersion());
+        assertEquals(messageEvent.getMapVersion(), sriMessage.getApplicationContext().getApplicationContextVersion().getVersion());
         var remoteAddress = sriMessage.getRemoteAddress();
         var localAddress = sriMessage.getLocalAddress();
         assertNotNull(remoteAddress);
-        assertEquals("22222222", remoteAddress.getGlobalTitle().getDigits());
+        assertEquals(messageEvent.getMsisdn(), remoteAddress.getGlobalTitle().getDigits());
         assertEquals(0, remoteAddress.getSignalingPointCode());
-        assertEquals(6, remoteAddress.getSubsystemNumber());
+        assertEquals(messageEvent.getHlrSsn(), remoteAddress.getSubsystemNumber());
         assertNotNull(localAddress);
-        assertEquals("888888", localAddress.getGlobalTitle().getDigits());
+        assertEquals(messageEvent.getGlobalTitle(), localAddress.getGlobalTitle().getDigits());
         assertEquals(0, localAddress.getSignalingPointCode());
-        assertEquals(8, localAddress.getSubsystemNumber());
+        assertEquals(messageEvent.getSmscSsn(), localAddress.getSubsystemNumber());
+        this.stopLayers();
+    }
+
+    @ParameterizedTest
+    @MethodSource("messageEventToTestMtForwardSMRequest")
+    @DisplayName("Create MTForwardSM Request From Message Event When Has Message Event Then It Creates Map Dialog Sms")
+    void createMtForwardSMRequestFromMessageEventWhenHasMessageEventThenItCreatesMapDialogSms(MessageEvent messageEvent) throws MAPException {
+        startLayers();
+        MAPDialogSms mtMessage = this.messageFactory.createMtForwardSMRequestFromMessageEvent(messageEvent);
+        checkCorrectMtForwardSMRequestValues(messageEvent, mtMessage);
         stopLayers();
+    }
+
+    static Stream<MessageEvent> messageEventToTestMtForwardSMRequest() {
+        return Stream.of(
+                MessageEvent.builder()
+                        .id("1722446896082-12194920127675")
+                        .messageId("1722446896081-12194920043917")
+                        .systemId("smpp_sp")
+                        .sourceAddr("8888")
+                        .destinationAddr("1234")
+                        .shortMessage("Hello!")
+                        .originNetworkId(3)
+                        .originNetworkType("SP")
+                        .originProtocol("SMPP")
+                        .destNetworkType("GW")
+                        .destProtocol("SS7")
+                        .destNetworkId(5)
+                        .sourceAddrTon(1)
+                        .sourceAddrNpi(4)
+                        .destAddrTon(1)
+                        .destAddrNpi(4)
+                        .routingId(1)
+                        .translationType(0)
+                        .globalTitle("2222")
+                        .globalTitleIndicator("GT0100")
+                        .msisdn("1234")
+                        .mscSsn(8)
+                        .hlrSsn(6)
+                        .smscSsn(8)
+                        .dataCoding(0)
+                        .imsi("748031234567890")
+                        .networkNodeNumber("598991900032")
+                        .networkNodeNumberNatureOfAddress(4)
+                        .networkNodeNumberNumberingPlan(1)
+                        .validityPeriod(120)
+                        .mapVersion(3)
+                        .networkIdToMapSri(-1)
+                        .networkIdToPermanentFailure(-1)
+                        .networkIdTempFailure(-1)
+                        .build(),
+                //DataCoding = 8
+                MessageEvent.builder()
+                        .id("1722446896082-12194920127675")
+                        .messageId("1722446896081-12194920043917")
+                        .systemId("smpp_sp")
+                        .sourceAddr("8888")
+                        .destinationAddr("1234")
+                        .shortMessage("Hello!")
+                        .originNetworkId(3)
+                        .originNetworkType("SP")
+                        .originProtocol("SMPP")
+                        .destNetworkType("GW")
+                        .destProtocol("SS7")
+                        .destNetworkId(5)
+                        .sourceAddrTon(1)
+                        .sourceAddrNpi(4)
+                        .destAddrTon(1)
+                        .destAddrNpi(4)
+                        .routingId(1)
+                        .translationType(0)
+                        .globalTitle("2222")
+                        .globalTitleIndicator("GT0100")
+                        .msisdn("1234")
+                        .mscSsn(8)
+                        .hlrSsn(6)
+                        .smscSsn(8)
+                        .dataCoding(8)
+                        .imsi("748031234567890")
+                        .networkNodeNumber("598991900032")
+                        .networkNodeNumberNatureOfAddress(4)
+                        .networkNodeNumberNumberingPlan(1)
+                        .validityPeriod(120)
+                        .mapVersion(3)
+                        .networkIdToMapSri(-1)
+                        .networkIdToPermanentFailure(-1)
+                        .networkIdTempFailure(-1)
+                        .build(),
+                //Message DLR
+                MessageEvent.builder()
+                        .id("1722446896082-12194920127675")
+                        .messageId("1722446896081-12194920043917")
+                        .deliverSmId("1")
+                        .systemId("smpp_sp")
+                        .sourceAddr("8888")
+                        .destinationAddr("1234")
+                        .shortMessage("Hello!")
+                        .originNetworkId(3)
+                        .originNetworkType("SP")
+                        .originProtocol("SMPP")
+                        .destNetworkType("GW")
+                        .destProtocol("SS7")
+                        .destNetworkId(5)
+                        .sourceAddrTon(1)
+                        .sourceAddrNpi(4)
+                        .destAddrTon(1)
+                        .destAddrNpi(4)
+                        .routingId(1)
+                        .translationType(0)
+                        .globalTitle("2222")
+                        .globalTitleIndicator("GT0100")
+                        .msisdn("1234")
+                        .mscSsn(8)
+                        .hlrSsn(6)
+                        .smscSsn(8)
+                        .dataCoding(8)
+                        .imsi("748031234567890")
+                        .networkNodeNumber("598991900032")
+                        .networkNodeNumberNatureOfAddress(4)
+                        .networkNodeNumberNumberingPlan(1)
+                        .validityPeriod(120)
+                        .mapVersion(3)
+                        .networkIdToMapSri(-1)
+                        .networkIdToPermanentFailure(-1)
+                        .networkIdTempFailure(-1)
+                        .isDlr(true)
+                        .build(),
+                //Message Part with reference number < 255
+                MessageEvent.builder()
+                        .id("1722446896082-12194920127675")
+                        .messageId("1722446896081-12194920043917")
+                        .systemId("smpp_sp")
+                        .sourceAddr("8888")
+                        .destinationAddr("1234")
+                        .shortMessage("Hello!")
+                        .originNetworkId(3)
+                        .originNetworkType("SP")
+                        .originProtocol("SMPP")
+                        .destNetworkType("GW")
+                        .destProtocol("SS7")
+                        .destNetworkId(5)
+                        .sourceAddrTon(1)
+                        .sourceAddrNpi(4)
+                        .destAddrTon(1)
+                        .destAddrNpi(4)
+                        .routingId(1)
+                        .translationType(0)
+                        .globalTitle("2222")
+                        .globalTitleIndicator("GT0100")
+                        .msisdn("1234")
+                        .mscSsn(8)
+                        .hlrSsn(6)
+                        .smscSsn(8)
+                        .dataCoding(0)
+                        .imsi("748031234567890")
+                        .networkNodeNumber("598991900032")
+                        .networkNodeNumberNatureOfAddress(4)
+                        .networkNodeNumberNumberingPlan(1)
+                        .validityPeriod(120)
+                        .mapVersion(3)
+                        .networkIdToMapSri(-1)
+                        .networkIdToPermanentFailure(-1)
+                        .networkIdTempFailure(-1)
+                        .msgReferenceNumber("4")
+                        .totalSegment(4)
+                        .segmentSequence(1)
+                        .registeredDelivery(0)
+                        .udhJson("{\"message\":\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor si\",\"0x00\":[4,4,1]}")
+                        .build(),
+                //Message Part with reference number > 255
+                MessageEvent.builder()
+                        .id("1722446896082-12194920127675")
+                        .messageId("1722446896081-12194920043917")
+                        .systemId("smpp_sp")
+                        .sourceAddr("8888")
+                        .destinationAddr("1234")
+                        .shortMessage("Hello!")
+                        .originNetworkId(3)
+                        .originNetworkType("SP")
+                        .originProtocol("SMPP")
+                        .destNetworkType("GW")
+                        .destProtocol("SS7")
+                        .destNetworkId(5)
+                        .sourceAddrTon(1)
+                        .sourceAddrNpi(4)
+                        .destAddrTon(1)
+                        .destAddrNpi(4)
+                        .routingId(1)
+                        .translationType(0)
+                        .globalTitle("2222")
+                        .globalTitleIndicator("GT0100")
+                        .msisdn("1234")
+                        .mscSsn(8)
+                        .hlrSsn(6)
+                        .smscSsn(8)
+                        .dataCoding(0)
+                        .imsi("748031234567890")
+                        .networkNodeNumber("598991900032")
+                        .networkNodeNumberNatureOfAddress(4)
+                        .networkNodeNumberNumberingPlan(1)
+                        .validityPeriod(120)
+                        .mapVersion(3)
+                        .networkIdToMapSri(-1)
+                        .networkIdToPermanentFailure(-1)
+                        .networkIdTempFailure(-1)
+                        .msgReferenceNumber("400")
+                        .totalSegment(4)
+                        .segmentSequence(1)
+                        .registeredDelivery(0)
+                        .udhJson("{\"message\":\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor si\",\"0x00\":[4,4,1]}")
+                        .build()
+        );
     }
 
     void checkCorrectMtForwardSMRequestValues(MessageEvent messageEvent, MAPDialogSms mapDialogSms) {
         assertNotNull(mapDialogSms);
-        assertEquals(3, mapDialogSms.getApplicationContext().getApplicationContextVersion().getVersion());
+        assertEquals(messageEvent.getMapVersion(), mapDialogSms.getApplicationContext().getApplicationContextVersion().getVersion());
         var remoteAddress = mapDialogSms.getRemoteAddress();
         var localAddress = mapDialogSms.getLocalAddress();
         assertNotNull(remoteAddress);
@@ -142,66 +393,64 @@ class MessageFactoryTest {
     }
 
     @Test
-    void testCreateMtForwardSMRequestFromMessageEvent() throws MAPException {
-        startLayers();
-        MessageEvent messageEvent;
-        MAPDialogSms mtMessage;
-
-        messageEvent = MessageUtil.getMessageEvent();
-        mtMessage = this.messageFactory.createMtForwardSMRequestFromMessageEvent(messageEvent);
-        checkCorrectMtForwardSMRequestValues(messageEvent, mtMessage);
-
-        messageEvent.setDataCoding(8);
-        mtMessage = this.messageFactory.createMtForwardSMRequestFromMessageEvent(messageEvent);
-        checkCorrectMtForwardSMRequestValues(messageEvent, mtMessage);
-
-        messageEvent.setDlr(true);
-        mtMessage = this.messageFactory.createMtForwardSMRequestFromMessageEvent(messageEvent);
-        checkCorrectMtForwardSMRequestValues(messageEvent, mtMessage);
-
-        messageEvent.setUdhJson("{\"message\":\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor si\",\"0x00\":[4,4,1]}");
-        messageEvent.setMsgReferenceNumber("4");
-        messageEvent.setTotalSegment(4);
-        messageEvent.setSegmentSequence(1);
-        messageEvent.setRegisteredDelivery(0);
-        mtMessage = this.messageFactory.createMtForwardSMRequestFromMessageEvent(messageEvent);
-        checkCorrectMtForwardSMRequestValues(messageEvent, mtMessage);
-
-        messageEvent.setUdhJson("{\"message\":\"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor si\",\"0x00\":[4,4,1]}");
-        messageEvent.setMsgReferenceNumber("400");
-        messageEvent.setTotalSegment(4);
-        messageEvent.setSegmentSequence(1);
-        messageEvent.setRegisteredDelivery(0);
-        mtMessage = this.messageFactory.createMtForwardSMRequestFromMessageEvent(messageEvent);
-        checkCorrectMtForwardSMRequestValues(messageEvent, mtMessage);
-
-        stopLayers();
-    }
-
-
-    @Test
-    void testCreateDeliveryReceiptMessage() {
-        MessageEvent messageEvent = MessageUtil.getMessageEvent();
-        var deliverMessageEvent = this.messageFactory.createDeliveryReceiptMessage(messageEvent, null, null);
-        checkCorrectDeliveryReceiptMessage(messageEvent, deliverMessageEvent);
+    @DisplayName("Create Delivery Receipt Message when has Single MessageEvent, Error Code Mapping and Extra Information then it creates MessageEvent in Delivery Receipt Format")
+    void createDeliveryReceiptMessageWhenHasMessageEventThenItCreatesMessageEventInDeliveryReceiptFormat() {
+        MessageEvent currentMessageEvent = MessageEvent.builder()
+                .id("1722446896082-12194920127675")
+                .messageId("1722446896081-12194920043917")
+                .systemId("smpp_sp")
+                .sourceAddr("8888")
+                .destinationAddr("1234")
+                .shortMessage("Hello!")
+                .originNetworkId(3)
+                .originNetworkType("SP")
+                .originProtocol("SMPP")
+                .destNetworkType("GW")
+                .destProtocol("SS7")
+                .destNetworkId(5)
+                .sourceAddrTon(1)
+                .sourceAddrNpi(4)
+                .destAddrTon(1)
+                .destAddrNpi(4)
+                .routingId(1)
+                .translationType(0)
+                .globalTitle("2222")
+                .globalTitleIndicator("GT0100")
+                .msisdn("1234")
+                .mscSsn(8)
+                .hlrSsn(6)
+                .smscSsn(8)
+                .dataCoding(0)
+                .imsi("748031234567890")
+                .networkNodeNumber("598991900032")
+                .networkNodeNumberNatureOfAddress(4)
+                .networkNodeNumberNumberingPlan(1)
+                .validityPeriod(120)
+                .mapVersion(3)
+                .networkIdToMapSri(-1)
+                .networkIdToPermanentFailure(-1)
+                .networkIdTempFailure(-1)
+                .build();
+        var deliverMessageEventSingle = this.messageFactory.createDeliveryReceiptMessage(currentMessageEvent, null, null);
+        this.checkCorrectDeliveryReceiptMessage(currentMessageEvent, deliverMessageEventSingle);
 
         ErrorCodeMapping defaultMapping = new ErrorCodeMapping();
         defaultMapping.setErrorCode(0);
         defaultMapping.setDeliveryErrorCode(0);
         defaultMapping.setDeliveryStatus("UNDELIV");
-        var deliverMessageEventWithErrorCode = this.messageFactory.createDeliveryReceiptMessage(messageEvent, defaultMapping, null);
-        checkCorrectDeliveryReceiptMessage(messageEvent, deliverMessageEventWithErrorCode);
+        var deliverMessageEventWithErrorCode = this.messageFactory.createDeliveryReceiptMessage(currentMessageEvent, defaultMapping, null);
+        this.checkCorrectDeliveryReceiptMessage(currentMessageEvent, deliverMessageEventWithErrorCode);
 
         String extraString = " imsi:" +
-                messageEvent.getImsi() +
+                currentMessageEvent.getImsi() +
                 " nnn_digits:" +
-                messageEvent.getNetworkNodeNumber() +
+                currentMessageEvent.getNetworkNodeNumber() +
                 " nnn_an:" +
-                messageEvent.getNetworkNodeNumberNatureOfAddress() +
+                currentMessageEvent.getNetworkNodeNumberNatureOfAddress() +
                 " nnn_np:" +
-                messageEvent.getNetworkNodeNumberNumberingPlan();
-        var deliverMessageEventWithExtraInformation = this.messageFactory.createDeliveryReceiptMessage(messageEvent, null, extraString);
-        checkCorrectDeliveryReceiptMessage(messageEvent, deliverMessageEventWithExtraInformation);
+                currentMessageEvent.getNetworkNodeNumberNumberingPlan();
+        var deliverMessageEventWithExtraInformation = this.messageFactory.createDeliveryReceiptMessage(currentMessageEvent, null, extraString);
+        this.checkCorrectDeliveryReceiptMessage(currentMessageEvent, deliverMessageEventWithExtraInformation);
     }
 
     void checkCorrectDeliveryReceiptMessage(MessageEvent messageEvent, MessageEvent deliverMessageEvent) {
@@ -226,56 +475,111 @@ class MessageFactoryTest {
         assertEquals(deliverMessageEvent.getDestAddrNpi(), deliverMessageEvent.getNumberingPlanMsisdn());
     }
 
-
-
     @Test
-    void testCreateMessageEventFromMoForwardShortMessageRequest() throws MAPException {
+    @DisplayName("Create MessageEvent from MoForwardShortMessageRequest with different ValidityPeriodFormat")
+    void createMessageEventFromMoForwardShortMessageRequestWithDifferentValidityPeriodFormat() throws MAPException {
         startLayers();
-        MoForwardShortMessageRequest moForwardShortMessageRequestImpl;
-        MessageEvent messageEventMo;
-        SmsSignalInfo smsSignalInfo;
-        SmsTpdu smsTpdu;
-        SmsSubmitTpdu smsSubmitTpdu;
-
-        moForwardShortMessageRequestImpl = MessageUtil.createMoMessage(ValidityPeriodFormat.fieldPresentRelativeFormat, this.mapLayer, 0);
-        smsSignalInfo = moForwardShortMessageRequestImpl.getSM_RP_UI();
-        smsTpdu = smsSignalInfo.decodeTpdu(true);
-        smsSubmitTpdu = (SmsSubmitTpdu) smsTpdu;
-        messageEventMo = this.messageFactory.createMessageEventFromMoForwardShortMessageRequest(moForwardShortMessageRequestImpl, smsSubmitTpdu);
-        assertNotNull(messageEventMo);
-
-        moForwardShortMessageRequestImpl = MessageUtil.createMoMessage(ValidityPeriodFormat.fieldPresentAbsoluteFormat, this.mapLayer, 0);
-        smsSignalInfo = moForwardShortMessageRequestImpl.getSM_RP_UI();
-        smsTpdu = smsSignalInfo.decodeTpdu(true);
-        smsSubmitTpdu = (SmsSubmitTpdu) smsTpdu;
-        messageEventMo = this.messageFactory.createMessageEventFromMoForwardShortMessageRequest(moForwardShortMessageRequestImpl, smsSubmitTpdu);
-        assertNotNull(messageEventMo);
-
-        moForwardShortMessageRequestImpl = MessageUtil.createMoMessage(ValidityPeriodFormat.fieldPresentEnhancedFormat, this.mapLayer, 0);
-        smsSignalInfo = moForwardShortMessageRequestImpl.getSM_RP_UI();
-        smsTpdu = smsSignalInfo.decodeTpdu(true);
-        smsSubmitTpdu = (SmsSubmitTpdu) smsTpdu;
-        messageEventMo = this.messageFactory.createMessageEventFromMoForwardShortMessageRequest(moForwardShortMessageRequestImpl, smsSubmitTpdu);
-        assertNotNull(messageEventMo);
-
+        List<MoForwardShortMessageRequest> moForwardShortMessageRequestImplList = List.of(
+                MessageUtil.createMoMessage(ValidityPeriodFormat.fieldPresentRelativeFormat, this.mapLayer, 0),
+                MessageUtil.createMoMessage(ValidityPeriodFormat.fieldPresentAbsoluteFormat, this.mapLayer, 0),
+                MessageUtil.createMoMessage(ValidityPeriodFormat.fieldPresentEnhancedFormat, this.mapLayer, 0)
+        );
+        moForwardShortMessageRequestImplList.forEach(mo -> {
+            try {
+                this.checkCorrectMoMessageEvent(mo);
+            } catch (MAPException e) {
+                throw new RuntimeException(e);
+            }
+        });
         stopLayers();
     }
 
+    void checkCorrectMoMessageEvent(MoForwardShortMessageRequest moForwardShortMessageRequestImpl) throws MAPException {
+        SmsSignalInfo smsSignalInfo = moForwardShortMessageRequestImpl.getSM_RP_UI();
+        SmsTpdu smsTpdu = smsSignalInfo.decodeTpdu(true);
+        SmsSubmitTpdu smsSubmitTpdu = (SmsSubmitTpdu) smsTpdu;
+        MessageEvent messageEventMo = this.messageFactory.createMessageEventFromMoForwardShortMessageRequest(moForwardShortMessageRequestImpl, smsSubmitTpdu);
+        assertNotNull(messageEventMo);
+        String messageId = smsSubmitTpdu.getMessageReference() + "";
+        assertEquals(messageId, messageEventMo.getMessageId());
+        assertEquals(messageId, messageEventMo.getParentId());
+        assertEquals(0, messageEventMo.getEsmClass());
+        assertTrue(messageEventMo.isMoMessage());
+
+        ISDNAddressString originMsisdn = moForwardShortMessageRequestImpl.getSM_RP_OA().getMsisdn();
+        assertEquals(originMsisdn.getAddress(), messageEventMo.getSourceAddr());
+        assertEquals(CustomTypeOfNumber.fromPrimitive(originMsisdn.getAddressNature()).getSmscValue().value(), messageEventMo.getSourceAddrTon());
+        assertEquals(CustomNumberingPlanIndicator.fromPrimitive(originMsisdn.getNumberingPlan()).getSmscValue().value(), messageEventMo.getSourceAddrNpi());
+        assertEquals(smsSubmitTpdu.getDataCodingScheme().getCode(), messageEventMo.getDataCoding());
+    }
+
     @Test
-    void testCreateReportSMDeliveryStatusRequestFromMessageEvent() throws MAPException {
+    @DisplayName("Create ReportSMDeliveryStatusRequest From Message Event Then It Creates Map Dialog Sms")
+    void createReportSMDeliveryStatusRequestFromMessageEventThenItCreatesMapDialogSms() throws MAPException {
         startLayers();
         MAPDialogSms mapDialogSms;
-        MessageEvent messageEvent = MessageUtil.getMessageEvent();
+        MessageEvent currentMessageEvent = MessageEvent.builder()
+                .id("1722446896082-12194920127675")
+                .messageId("1722446896081-12194920043917")
+                .systemId("smpp_sp")
+                .sourceAddr("8888")
+                .destinationAddr("1234")
+                .shortMessage("Hello!")
+                .originNetworkId(3)
+                .originNetworkType("SP")
+                .originProtocol("SMPP")
+                .destNetworkType("GW")
+                .destProtocol("SS7")
+                .destNetworkId(5)
+                .sourceAddrTon(1)
+                .sourceAddrNpi(4)
+                .destAddrTon(1)
+                .destAddrNpi(4)
+                .routingId(1)
+                .translationType(0)
+                .globalTitle("2222")
+                .globalTitleIndicator("GT0100")
+                .msisdn("1234")
+                .mscSsn(8)
+                .hlrSsn(6)
+                .smscSsn(8)
+                .dataCoding(0)
+                .imsi("748031234567890")
+                .networkNodeNumber("598991900032")
+                .networkNodeNumberNatureOfAddress(4)
+                .networkNodeNumberNumberingPlan(1)
+                .validityPeriod(120)
+                .mapVersion(3)
+                .networkIdToMapSri(-1)
+                .networkIdToPermanentFailure(-1)
+                .networkIdTempFailure(-1)
+                .build();
 
-        mapDialogSms = this.messageFactory.createReportSMDeliveryStatusRequestFromMessageEvent(messageEvent, true);
-        assertNotNull(mapDialogSms);
+        mapDialogSms = this.messageFactory.createReportSMDeliveryStatusRequestFromMessageEvent(
+                currentMessageEvent, true);
+        this.checkCorrectReportSMDeliveryStatusRequestValues(currentMessageEvent, mapDialogSms);
 
-        mapDialogSms = this.messageFactory.createReportSMDeliveryStatusRequestFromMessageEvent(messageEvent, false);
-        assertNotNull(mapDialogSms);
+        mapDialogSms = this.messageFactory.createReportSMDeliveryStatusRequestFromMessageEvent(
+                currentMessageEvent, false);
+        this.checkCorrectReportSMDeliveryStatusRequestValues(currentMessageEvent, mapDialogSms);
 
         stopLayers();
     }
 
+    void checkCorrectReportSMDeliveryStatusRequestValues(MessageEvent messageEvent, MAPDialogSms mapDialogSms) {
+        assertNotNull(mapDialogSms);
+        assertEquals(messageEvent.getMapVersion(), mapDialogSms.getApplicationContext().getApplicationContextVersion().getVersion());
+        var remoteAddress = mapDialogSms.getRemoteAddress();
+        var localAddress = mapDialogSms.getLocalAddress();
+        assertNotNull(remoteAddress);
+        assertEquals(messageEvent.getDestinationAddr(), remoteAddress.getGlobalTitle().getDigits());
+        assertEquals(0, remoteAddress.getSignalingPointCode());
+        assertEquals(messageEvent.getMscSsn(), remoteAddress.getSubsystemNumber());
 
+        assertNotNull(localAddress);
+        assertEquals(messageEvent.getGlobalTitle(), localAddress.getGlobalTitle().getDigits());
+        assertEquals(0, localAddress.getSignalingPointCode());
+        assertEquals(messageEvent.getSmscSsn(), localAddress.getSubsystemNumber());
+    }
 
 }

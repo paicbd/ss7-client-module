@@ -10,6 +10,7 @@ import org.mobicents.protocols.api.Management;
 import org.mobicents.protocols.sctp.netty.NettySctpManagementImpl;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
 
 @Slf4j
@@ -104,16 +105,16 @@ public class SctpLayer implements ILayer {
                 var extraHostAddresses = (Objects.isNull(socketAssociation.getExtraAddress()) ||
                         socketAssociation.getExtraAddress().isEmpty()) ? null : socketAssociation.getExtraAddress().split(",");
                 if (socketType == Ss7Utils.AssociationType.CLIENT) {
-                    addClientAssociation(socketAssociation, association, extraHostAddresses);
+                    this.addClientAssociation(socketAssociation, association, extraHostAddresses);
                 } else {
-                    addServerAssociation(socketAssociation, association, extraHostAddresses);
+                    this.addServerAssociation(socketAssociation, association, extraHostAddresses);
                 }
             }
         }
     }
 
     private SettingsM3UA.Associations.Socket getGatewayM3uaSocket(int m3uaSocketId) {
-        SettingsM3UA.Associations.Socket socket = null;
+        SettingsM3UA.Associations.Socket socket;
         var optionalSocket = this.settingsM3UA.getAssociations().getSockets().stream().filter(
                 s -> s.getId() == m3uaSocketId).findFirst();
         if (optionalSocket.isPresent()) {
@@ -122,6 +123,10 @@ public class SctpLayer implements ILayer {
         }
         log.warn("No socket found for id {} in {}", m3uaSocketId, this.getName());
         return null;
+    }
+
+    private List<SettingsM3UA.Associations.Association> getAssociationListBySocket(int m3uaSocketId) {
+        return this.settingsM3UA.getAssociations().getAssociationList().stream().filter(association -> association.getM3uaSocketId() == m3uaSocketId).toList();
     }
 
     private void addClientAssociation(SettingsM3UA.Associations.Socket socket,
@@ -152,5 +157,56 @@ public class SctpLayer implements ILayer {
         this.sctp.addServerAssociation(association.getPeer(), association.getPeerPort(), socket.getName(),
                 association.getName(), IpChannelType.SCTP);
 
+    }
+
+    public void manageAssociation(String assocName, boolean start) {
+        try {
+            if (start) {
+                this.sctp.startAssociation(assocName);
+                return;
+            }
+            this.sctp.stopAssociation(assocName);
+        } catch (Exception e) {
+            log.error("Error on {} {} association", start ? "starting" : "stopping", assocName, e);
+        }
+    }
+
+    public void manageSocket(int idSocket, boolean start) {
+        try {
+            var socket = this.getGatewayM3uaSocket(idSocket);
+            if (Objects.isNull(socket)) {
+                log.warn("No socket found for id {} in {} for {} socket", idSocket, this.getName(), start ? "start" : "stop");
+                return;
+            }
+            var socketType = Ss7Utils.AssociationType.valueOf(socket.getSocketType().toUpperCase());
+            this.changeAssociationsBySocket(socket.getId(), start);
+            if (Ss7Utils.AssociationType.SERVER.equals(socketType)) {
+                this.manageSctpServer(socket.getName(), start);
+            }
+        } catch (Exception e) {
+            log.error("Error on manage socket, socketId {}, start {}", idSocket, start, e);
+        }
+    }
+
+    private void changeAssociationsBySocket(int idSocket, boolean start) {
+        this.getAssociationListBySocket(idSocket).forEach(association -> {
+            int expectedState = start ? 1 : 0;
+            if (association.getEnabled() != expectedState) {
+                try {
+                    association.setEnabled(expectedState);
+                    this.manageAssociation(association.getName(), start);
+                } catch (Exception e) {
+                    log.error("Error on {} {} association", start ? "start" : "stop", association.getName(), e);
+                }
+            }
+        });
+    }
+
+    private void manageSctpServer(String socketName, boolean start) throws Exception {
+        if (start) {
+            this.sctp.startServer(socketName);
+        } else {
+            this.sctp.stopServer(socketName);
+        }
     }
 }

@@ -1,6 +1,8 @@
 package com.paicbd.module.ss7.layer.impl.network.layers;
 
 import com.paicbd.module.dto.SettingsSCCP;
+import com.paicbd.module.dto.statics.Mtp3DestinationConfig;
+import com.paicbd.module.dto.statics.RemoteResourceConfig;
 import com.paicbd.module.ss7.layer.api.network.ILayer;
 import com.paicbd.module.utils.Ss7Utils;
 import com.paicbd.smsc.exception.RTException;
@@ -45,7 +47,7 @@ public class SccpLayer implements ILayer {
         this.sccpExtModule = new SccpExtModuleImpl();
         ss7ExtInterface.setSs7ExtSccpInterface(this.sccpExtModule);
         this.sccp = new SccpStackImpl(name, ss7ExtInterface);
-        this.sccp.setMtp3UserPart(this.settingsSCCP.getGeneral().getId(), m3ua.getMtp3UserPart());
+        this.sccp.setMtp3UserPart(this.settingsSCCP.getGeneralSCCP().getId(), m3ua.getMtp3UserPart());
     }
 
     @Override
@@ -86,7 +88,7 @@ public class SccpLayer implements ILayer {
 
     private void loadRemoteResources() throws Exception {
         List<Integer> remoteSpcList = this.settingsSCCP.getRemoteResources().stream()
-                .map(SettingsSCCP.RemoteResourceConfig::getRemoteSpc)
+                .map(RemoteResourceConfig::getRemoteSpc)
                 .distinct()
                 .toList();
 
@@ -107,10 +109,10 @@ public class SccpLayer implements ILayer {
     private void loadServiceAccessPoints() {
         this.settingsSCCP.getServiceAccessPoints().getServiceAccess().forEach(serviceAccessConfig -> {
             try {
-                var mtp3DestinationConfig = getMtp3DestinationConfig(serviceAccessConfig.getId());
+                var mtp3DestinationConfig = this.getMtp3DestinationConfig(serviceAccessConfig.getId());
                 sccp.getRouter().addMtp3ServiceAccessPoint(
                         serviceAccessConfig.getId(),
-                        this.settingsSCCP.getGeneral().getId(),
+                        this.settingsSCCP.getGeneralSCCP().getId(),
                         serviceAccessConfig.getOriginPointCode(),
                         serviceAccessConfig.getNetworkIndicator(),
                         0, serviceAccessConfig.getLocalGtDigits());
@@ -204,7 +206,7 @@ public class SccpLayer implements ILayer {
         });
     }
 
-    private List<SettingsSCCP.Mtp3DestinationConfig> getMtp3DestinationConfig(int id) {
+    private List<Mtp3DestinationConfig> getMtp3DestinationConfig(int id) {
         var mtp3DestinationConfigList = this.settingsSCCP.getServiceAccessPoints().getMtp3Destinations().stream().filter(
                 s -> s.getSccpSapId() == id).toList();
         if (mtp3DestinationConfigList.isEmpty()) {

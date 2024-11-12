@@ -7,6 +7,7 @@ import com.paicbd.module.utils.Ss7Utils;
 import com.paicbd.smsc.dto.ErrorCodeMapping;
 import com.paicbd.smsc.dto.MessageEvent;
 import com.paicbd.smsc.utils.Converter;
+import com.paicbd.smsc.utils.RequestDelivery;
 import com.paicbd.smsc.utils.UtilsEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.jsmpp.bean.DeliveryReceipt;
@@ -164,7 +165,7 @@ public class MessageFactory {
         boolean moreMessagesToSend = false;
         boolean forwardedOrSpawned = false;
         boolean replyPathExists = false;
-        boolean statusReportIndication = message.getRegisteredDelivery() == 1;
+        boolean statusReportIndication = Objects.equals(message.getRegisteredDelivery(), RequestDelivery.REQUEST_DLR.getValue());
         SmsSignalInfo si;
         ProtocolIdentifier pi = new ProtocolIdentifierImpl(0);
 
@@ -277,12 +278,11 @@ public class MessageFactory {
 
             if (Objects.nonNull(validityPeriod) && Objects.nonNull(validityPeriodFormat)) {
                 switch (validityPeriodFormat) {
-                    case fieldPresentRelativeFormat:
-                        int secondsValidityPeriod = (int) (validityPeriod.getRelativeFormatHours() * 3600);
-                        messageMo.setValidityPeriod(secondsValidityPeriod + "");
-                        break;
-
-                    case fieldPresentAbsoluteFormat:
+                    case fieldPresentRelativeFormat -> {
+                        long secondsValidityPeriod = (long) (validityPeriod.getRelativeFormatHours() * 3600);
+                        messageMo.setValidityPeriod(secondsValidityPeriod);
+                    }
+                    case fieldPresentAbsoluteFormat -> {
                         AbsoluteTimeStamp absoluteTimeStamp = validityPeriod.getAbsoluteFormatValue();
                         Calendar calendarDate = Ss7Utils.toCalendar(absoluteTimeStamp);
                         long timeInMillis = calendarDate.getTimeInMillis();
@@ -294,13 +294,12 @@ public class MessageFactory {
                         adjustedCalendar.setTimeInMillis(adjustedTimeInMillis);
                         long differenceInMillis = adjustedCalendar.getTimeInMillis() - calendarDate.getTimeInMillis();
                         long differenceInSeconds = differenceInMillis / 1000;
-                        messageMo.setValidityPeriod(differenceInSeconds + "");
-                        break;
-
-                    default:
+                        messageMo.setValidityPeriod(differenceInSeconds);
+                    }
+                    default -> {
                         log.warn("Received unsupported ValidityPeriodFormat: {} - we set 80s", validityPeriodFormat);
-                        messageMo.setValidityPeriod("80");
-                        break;
+                        messageMo.setValidityPeriod(80);
+                    }
                 }
             }
         } catch (MAPException e) {
@@ -308,7 +307,6 @@ public class MessageFactory {
         }
         return messageMo;
     }
-
 
     public MessageEvent createDeliveryReceiptMessage(MessageEvent messageEvent, ErrorCodeMapping errorCodeMapping, String extraInformation) {
         MessageEvent deliveryReceiptMessageEvent = new MessageEvent();
@@ -329,7 +327,7 @@ public class MessageFactory {
         String dlrMessage = Objects.isNull(extraInformation) ? deliveryReceipt.toString() : deliveryReceipt.toString().concat(extraInformation);
         deliveryReceiptMessageEvent.setId(System.currentTimeMillis() + "-" + System.nanoTime());
         deliveryReceiptMessageEvent.setRegisteredDelivery(0);
-        deliveryReceiptMessageEvent.setDeliverSmId(messageEvent.getId());
+        deliveryReceiptMessageEvent.setDeliverSmId(messageEvent.getMessageId());
         deliveryReceiptMessageEvent.setDlr(true);
         deliveryReceiptMessageEvent.setImsi(null);
         deliveryReceiptMessageEvent.setShortMessage(dlrMessage);
@@ -356,10 +354,10 @@ public class MessageFactory {
 
     private void logMapMessage(String messageType, MAPDialogSms mapDialogSms) {
         log.debug("MAP message {} with " +
-                        "LocalAddress: {}, " +
-                        "RemoteAddress: {}," +
-                        "LocalDialogId: {}, " +
-                        "RemoteDialogId: {}",
+                  "LocalAddress: {}, " +
+                  "RemoteAddress: {}," +
+                  "LocalDialogId: {}, " +
+                  "RemoteDialogId: {}",
                 messageType, mapDialogSms.getLocalAddress(), mapDialogSms.getRemoteAddress(), mapDialogSms.getLocalDialogId(), mapDialogSms.getRemoteDialogId());
     }
 
@@ -372,7 +370,7 @@ public class MessageFactory {
                 NatureOfAddress.INTERNATIONAL,
                 message.getGlobalTitle()
         );
-        return  Ss7Utils.convertToSccpAddress(globalTitleClientSccpAddress, 0, message.getSmscSsn());
+        return Ss7Utils.convertToSccpAddress(globalTitleClientSccpAddress, 0, message.getSmscSsn());
     }
 
     public void setSccpFieldsToMessage(MessageEvent messageEvent, MAPDialogSms mapDialogSms) {

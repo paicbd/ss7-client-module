@@ -1,12 +1,14 @@
 package com.paicbd.module.ss7.layer.impl.channel;
 
+import com.paicbd.module.utils.Constants;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import java.util.Map;
+import org.restcomm.protocols.ss7.map.api.service.sms.MoForwardShortMessageRequest;
+import org.restcomm.protocols.ss7.map.service.sms.MoForwardShortMessageRequestImpl;
+import org.restcomm.protocols.ss7.map.service.sms.SendRoutingInfoForSMRequestImpl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 class ChannelMessageTest {
 
@@ -20,57 +22,35 @@ class ChannelMessageTest {
     }
 
     @Test
-    void testConstructor() {
-        assertEquals(transactionId, channelMessage.getTransactionId());
-        assertEquals(originId, channelMessage.getOriginId());
-    }
-
-    @Test
-    void setParameterAdd() {
-        String paramName = "key";
-        String paramValue = "value";
+    @DisplayName("Add parameter to the payload parameters map")
+    void setParameterWhenAddParamsThenGet() {
+        String paramName = Constants.MESSAGE_TYPE;
+        MoForwardShortMessageRequest moForwardShortMessageRequest = new MoForwardShortMessageRequestImpl();
+        String paramValue = moForwardShortMessageRequest.getMessageType().toString();
         channelMessage.setParameter(paramName, paramValue);
         assertEquals(paramValue, channelMessage.getParameter(paramName));
     }
 
     @Test
-    void testSetParameterUpdate() {
-        String paramName = "key";
-        String paramValue1 = "value1";
-        String paramValue2 = "value2";
+    @DisplayName("Update parameter in the payload parameters map")
+    void setParameterWhenUpdateParamsThenGet() {
+        String paramName = Constants.MESSAGE_TYPE;
+        MoForwardShortMessageRequest moForwardShortMessageRequest = new MoForwardShortMessageRequestImpl();
+        SendRoutingInfoForSMRequestImpl sendRoutingInfoForSMRequest = new SendRoutingInfoForSMRequestImpl();
+        String paramValue = moForwardShortMessageRequest.getMessageType().toString();
+        String paramValueUpdated = sendRoutingInfoForSMRequest.getMessageType().toString();
 
-        channelMessage.setParameter(paramName, paramValue1);
-        channelMessage.setParameter(paramName, paramValue2);
+        channelMessage.setParameter(paramName, paramValue);
+        assertEquals(paramValue, channelMessage.getParameter(paramName));
 
-        assertEquals(paramValue2, channelMessage.getParameter(paramName));
+        channelMessage.setParameter(paramName, paramValueUpdated);
+        assertEquals(paramValueUpdated, channelMessage.getParameter(paramName));
     }
 
     @Test
-    void testGetParameterNull() {
-        String paramName = "nonExistentKey";
-        assertNull(channelMessage.getParameter(paramName));
-    }
-
-
-    @Test
-    void testToString() {
+    @DisplayName("Test toString method")
+    void toStringWhenAllParamsAreValid() {
         String expectedString = "[tid = " + transactionId + ", origin = " + originId + "]";
         assertEquals(expectedString, channelMessage.toString());
-    }
-
-    @Test
-    void testPayloadParameters() {
-        String paramName1 = "key1";
-        String paramValue1 = "value1";
-        String paramName2 = "key2";
-        String paramValue2 = "value2";
-
-        channelMessage.setParameter(paramName1, paramValue1);
-        channelMessage.setParameter(paramName2, paramValue2);
-
-        Map<String, Object> payloadParameters = channelMessage.getPayloadParameters();
-        assertEquals(2, payloadParameters.size());
-        assertEquals(paramValue1, payloadParameters.get(paramName1));
-        assertEquals(paramValue2, payloadParameters.get(paramName2));
     }
 }

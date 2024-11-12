@@ -1,11 +1,12 @@
 package com.paicbd.module.ss7.layer;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.paicbd.module.dto.Gateway;
+import com.paicbd.module.ss7.MessageProcessing;
 import com.paicbd.module.ss7.layer.impl.channel.MapChannel;
 import com.paicbd.module.ss7.layer.api.network.ILayer;
 import com.paicbd.module.ss7.layer.impl.network.LayerFactory;
 import com.paicbd.module.ss7.layer.impl.network.layers.MapLayer;
+import com.paicbd.module.ss7.layer.impl.network.layers.SctpLayer;
 import com.paicbd.module.utils.AppProperties;
 import com.paicbd.module.utils.Ss7Utils;
 import com.paicbd.smsc.cdr.CdrProcessor;
@@ -32,19 +33,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 public class LayerManager {
+    private final AtomicBoolean isUp = new AtomicBoolean(false);
     private final LinkedHashMap<String, ILayer> layers = new LinkedHashMap<>();
+    private final ExecutorService mainExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
     private final Gateway currentGateway;
     @Getter
     private final String persistDirectory;
     private final JedisCluster jedisCluster;
     private final CdrProcessor cdrProcessor;
-    private MapChannel mapChannel;
-
-    private final ExecutorService mainExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final AppProperties appProperties;
     private final String redisListName;
-    private final AtomicBoolean isUp = new AtomicBoolean(false);
     private final ConcurrentMap<String, List<ErrorCodeMapping>> errorCodeMappingConcurrentHashMap;
+    private MessageProcessing messageProcessing;
 
     public LayerManager(Gateway currentGateway, String persistDirectory, JedisCluster jedisCluster,
                         CdrProcessor cdrProcessor, AppProperties appProperties, ConcurrentMap<String, List<ErrorCodeMapping>> errorCodeMappingConcurrentHashMap) {
@@ -98,20 +99,26 @@ public class LayerManager {
 
     private void setUpChannels() {
         try {
-            this.mapChannel = new MapChannel(this.jedisCluster, this.currentGateway, this.cdrProcessor,
-                    this.appProperties.getRedisMessageRetryQueue(), this.appProperties.getRedisMessageList(), errorCodeMappingConcurrentHashMap);
-
             var mapLayer = (MapLayer) this.layers.get(this.currentGateway.getName() + "-MAP");
-            mapLayer.setChannelHandler(mapChannel);
-            this.mapChannel.channelInitialize(mapLayer);
+            this.messageProcessing = new MessageProcessing(
+                    mapLayer,
+                    this.jedisCluster,
+                    this.currentGateway,
+                    this.cdrProcessor,
+                    this.appProperties.getRedisMessageRetryQueue(),
+                    this.appProperties.getRedisMessageList(),
+                    this.errorCodeMappingConcurrentHashMap);
 
+            MapChannel mapChannel = new MapChannel(this.messageProcessing);
+            mapLayer.setChannelHandler(mapChannel);
         } catch (RTException e) {
             log.error("Channel of gateway {} not started", this.currentGateway.getName(), e);
         }
     }
 
     private void processor() {
-        CompletableFuture.runAsync(() -> Flux.interval(Duration.ofMillis(this.appProperties.getGatewaysWorkExecuteEvery()))
+        Duration durationDelay = Duration.ofMillis(this.appProperties.getGatewaysWorkExecuteEvery());
+        CompletableFuture.runAsync(() -> Flux.interval(durationDelay)
                 .flatMap(f -> {
                     if (!this.isUp.get()) {
                         return Flux.empty();
@@ -124,44 +131,56 @@ public class LayerManager {
 
     private Flux<List<MessageEvent>> fetchAllItems() {
         int batchSize = batchPerWorker();
-        if (batchSize <= 0) {
+        if (batchSize == 0) {
             return Flux.empty();
         }
         return Flux.range(0, appProperties.getWorkersPerGateway())
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMap(worker -> {
                     List<String> batch = jedisCluster.lpop(redisListName, batchSize);
-                    if (Objects.isNull(batch) || batch.isEmpty()) {
+                    if (Objects.isNull(batch)) {
                         return Flux.empty();
                     }
                     List<MessageEvent> messageList = batch
-                            .stream().parallel()
-                            .map(message -> Converter.stringToObject(message, new TypeReference<MessageEvent>() {
-                            }))
+                            .parallelStream()
+                            .map(message -> Converter.stringToObject(message, MessageEvent.class))
+                            .filter(Objects::nonNull)
                             .toList();
                     return Flux.just(messageList);
                 }).subscribeOn(Schedulers.boundedElastic());
     }
 
     private int batchPerWorker() {
+        int workers = appProperties.getWorkersPerGateway() > 0 ? appProperties.getWorkersPerGateway() : 1;
         int recordsToTake = appProperties.getTpsPerGw() * (appProperties.getGatewaysWorkExecuteEvery() / 1000);
         int listSize = (int) jedisCluster.llen(redisListName);
+        if (listSize == 0) {
+            return 0;
+        }
         int min = Math.min(recordsToTake, listSize);
-        var bpw = min / appProperties.getWorkersPerGateway();
+        var bpw = min / workers;
         return bpw > 0 ? bpw : 1;
     }
 
-
-    private void sendMessage(List<MessageEvent> events) {
+    protected void sendMessage(List<MessageEvent> events) {
         Flux.fromIterable(events)
                 .subscribeOn(Schedulers.boundedElastic())
-                .doOnNext(message -> {
-                    try {
-                        this.mapChannel.sendMessage(message);
-                    } catch (Exception exception) {
-                        log.error("Error on send Message on method sendMessage");
-                    }
-                }).subscribe();
+                .doOnNext(message -> this.messageProcessing.sendMessage(message))
+                .doOnError(e -> log.error("Error on send message: -> {}", e.getMessage()))
+                .subscribe();
+    }
+
+    private SctpLayer getSctpLayer() {
+        String sctpLayerName = this.currentGateway.getName() + "-" + Ss7Utils.LayerType.SCTP.name();
+        return (SctpLayer) layers.get(sctpLayerName);
+    }
+
+    public void manageAssociation(String associationName, boolean start) {
+        this.getSctpLayer().manageAssociation(associationName, start);
+    }
+
+    public void manageSocket(int idSocket, boolean start) {
+        this.getSctpLayer().manageSocket(idSocket, start);
     }
 
     private void shutDownAllLayers() {
@@ -182,5 +201,4 @@ public class LayerManager {
             }
         }
     }
-
 }

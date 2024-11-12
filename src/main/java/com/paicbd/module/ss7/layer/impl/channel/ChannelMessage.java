@@ -1,12 +1,10 @@
 package com.paicbd.module.ss7.layer.impl.channel;
 
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
 import java.util.HashMap;
 import java.util.Map;
 
-@Getter
 @RequiredArgsConstructor
 public class ChannelMessage {
 

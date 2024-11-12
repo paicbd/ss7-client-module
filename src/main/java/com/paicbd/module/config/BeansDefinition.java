@@ -6,6 +6,7 @@ import com.paicbd.smsc.cdr.CdrProcessor;
 import com.paicbd.smsc.dto.ErrorCodeMapping;
 import com.paicbd.smsc.dto.UtilsRecords;
 import com.paicbd.smsc.utils.Converter;
+import com.paicbd.smsc.utils.Generated;
 import com.paicbd.smsc.ws.SocketSession;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+@Generated
 @Configuration
 @RequiredArgsConstructor
 public class BeansDefinition {

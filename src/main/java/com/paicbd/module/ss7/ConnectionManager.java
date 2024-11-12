@@ -9,6 +9,7 @@ import com.paicbd.smsc.cdr.CdrProcessor;
 import com.paicbd.smsc.dto.ErrorCodeMapping;
 import com.paicbd.smsc.exception.RTException;
 import com.paicbd.smsc.utils.Converter;
+import com.paicbd.smsc.utils.Generated;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +18,6 @@ import org.springframework.stereotype.Component;
 import redis.clients.jedis.JedisCluster;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,13 +27,14 @@ import java.util.concurrent.ConcurrentMap;
 @Component
 @RequiredArgsConstructor
 public class ConnectionManager {
+    private final ConcurrentHashMap<Integer, LayerManager> layerManagerMap = new ConcurrentHashMap<>();
+
     private final ExtendedResource extendedResource;
     private final JedisCluster jedisCluster;
     private final ConcurrentMap<Integer, Gateway> gatewayConcurrentMap;
     private final AppProperties appProperties;
     private final ConcurrentMap<String, List<ErrorCodeMapping>> errorCodeMappingConcurrentHashMap;
     private final CdrProcessor cdrProcessor;
-    private final ConcurrentHashMap<Integer, LayerManager> layerManagerMap = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
@@ -43,22 +44,19 @@ public class ConnectionManager {
     }
 
     private void loadGateways() {
-        try {
-            var gatewaysMaps = this.jedisCluster.hgetAll(this.appProperties.getKeyGatewayRedis());
-            if (gatewaysMaps.isEmpty()) {
-                log.warn("No gateways found for connect");
-                return;
-            }
-            gatewaysMaps.values().forEach(gatewayInRaw -> {
-                Gateway gateway = Converter.stringToObject(gatewayInRaw, new TypeReference<>() {
-                });
-                this.gatewayConcurrentMap.put(gateway.getNetworkId(), gateway);
-            });
-            log.warn("{} Gateways load successfully", this.gatewayConcurrentMap.size());
-
-        } catch (Exception e) {
-            log.error("Error on loading the gateways {}", e.getMessage(), e);
+        var gatewaysMaps = this.jedisCluster.hgetAll(this.appProperties.getKeyGatewayRedis());
+        if (gatewaysMaps.isEmpty()) {
+            log.warn("No gateways found for connect");
+            return;
         }
+        gatewaysMaps.values().forEach(gatewayInRaw -> {
+            Gateway gateway = Converter.stringToObject(gatewayInRaw, Gateway.class);
+            Objects.requireNonNull(gateway, "An error occurred while casting the gateway object in the loadGateways method");
+            if (gateway.getEnabled() == 1) {
+                this.gatewayConcurrentMap.put(gateway.getNetworkId(), gateway);
+            }
+        });
+        log.warn("{} Gateways load successfully", this.gatewayConcurrentMap.size());
     }
 
     private void loadErrorCodeMapping() {
@@ -83,29 +81,23 @@ public class ConnectionManager {
     private void startLayers() {
         this.gatewayConcurrentMap.values().forEach(gateway -> {
             String persistDirectoryName = gateway.getName();
-            try {
-                String persistDirectoryPath = this.extendedResource.createDirectory(persistDirectoryName);
-                LayerManager layerManager = new LayerManager(gateway, persistDirectoryPath, this.jedisCluster, this.cdrProcessor,
-                        this.appProperties, this.errorCodeMappingConcurrentHashMap);
-                this.layerManagerMap.put(gateway.getNetworkId(), layerManager);
-                layerManager.connect();
-            } catch (Exception e) {
-                throw new RTException("Error on start Layers for gateway " + gateway.getName(), e);
-            }
+            String persistDirectoryPath = this.extendedResource.createDirectory(persistDirectoryName);
+            LayerManager layerManager = new LayerManager(gateway, persistDirectoryPath, this.jedisCluster, this.cdrProcessor,
+                    this.appProperties, this.errorCodeMappingConcurrentHashMap);
+            this.layerManagerMap.put(gateway.getNetworkId(), layerManager);
+            layerManager.connect();
         });
     }
 
     private void stopManager() {
         layerManagerMap.values().forEach(layerManager -> {
+            layerManager.stopLayerManager();
             File file = new File(layerManager.getPersistDirectory());
-            try {
-                extendedResource.deleteDirectory(file);
-            } catch (IOException e) {
-                log.error("Error deleting persist directory", e);
-            }
+            extendedResource.deleteDirectory(file);
         });
     }
 
+    @Generated
     private void waitForStart() {
         try {
             Thread.sleep(4000);
@@ -115,26 +107,45 @@ public class ConnectionManager {
         }
     }
 
-    public void updateGateway(String networkId) {
-        String gatewayInRaw = jedisCluster.hget(appProperties.getKeyGatewayRedis(), networkId);
-        Gateway gateway = Converter.stringToObject(gatewayInRaw, new TypeReference<>() {
-        });
+    public void updateGateway(String networkIdInRaw) throws NumberFormatException {
+        int networkId = Integer.parseInt(networkIdInRaw);
+        String gatewayInRaw = jedisCluster.hget(appProperties.getKeyGatewayRedis(), networkIdInRaw);
+        Gateway gateway = Converter.stringToObject(gatewayInRaw, Gateway.class);
+        Objects.requireNonNull(gateway, "An error occurred while casting the gateway object in the updateGateway method");
+
         if (gatewayConcurrentMap.containsKey(gateway.getNetworkId())) {
             this.refreshLayer(gateway);
         } else {
             this.addLayer(gateway);
         }
-        gatewayConcurrentMap.put(Integer.parseInt(networkId), gateway);
+        gatewayConcurrentMap.put(networkId, gateway);
     }
 
     public void deleteGateway(String networkId) {
-        int key = Integer.parseInt(networkId);
-        if (gatewayConcurrentMap.containsKey(key)) {
-            gatewayConcurrentMap.remove(key);
-            stopLayer(key);
+        Gateway gateway = gatewayConcurrentMap.remove(Integer.parseInt(networkId));
+        if (Objects.nonNull(gateway)) {
+            stopLayer(gateway.getNetworkId());
         } else {
             log.warn("No Gateway found for networkId: {}. No action taken.", networkId);
         }
+    }
+
+    public void manageSocket(String networkId, int socketId, boolean start) {
+        var layerManager = this.layerManagerMap.get(Integer.parseInt(networkId));
+        if (Objects.isNull(layerManager)) {
+            log.warn("No layer found for networkId: {}, to {} socket: {}", networkId, start ? "start" : "stop", socketId);
+            return;
+        }
+        layerManager.manageSocket(socketId, start);
+    }
+
+    public void manageAssociation(String networkId, String associationName, boolean start) {
+        var layerManager = this.layerManagerMap.get(Integer.parseInt(networkId));
+        if (Objects.isNull(layerManager)) {
+            log.warn("No layer found for networkId: {}, to {} association: {}", networkId, start ? "start" : "stop", associationName);
+            return;
+        }
+        layerManager.manageAssociation(associationName, start);
     }
 
     private void refreshLayer(Gateway gateway) {
@@ -143,30 +154,22 @@ public class ConnectionManager {
         addLayer(gateway);
     }
 
-    private void stopLayer(int networkId) {
+    void stopLayer(int networkId) {
         var layer = layerManagerMap.remove(networkId);
         layer.stopLayerManager();
         File file = new File(layer.getPersistDirectory());
-        try {
-            extendedResource.deleteDirectory(file);
-        } catch (IOException e) {
-            log.error("Error deleting persist directory for networkId {}", networkId, e);
-        }
+        extendedResource.deleteDirectory(file);
     }
 
     private void addLayer(Gateway gateway) {
         log.warn("Adding new layer for gateway {}", gateway.getName());
         String persistDirectoryName = gateway.getName();
         String persistDirectoryPath;
-        try {
-            persistDirectoryPath = extendedResource.createDirectory(persistDirectoryName);
-            LayerManager layerManager = new LayerManager(gateway, persistDirectoryPath, jedisCluster, cdrProcessor,
-                    appProperties, errorCodeMappingConcurrentHashMap);
-            layerManagerMap.put(gateway.getNetworkId(), layerManager);
-            layerManager.connect();
-        } catch (IOException e) {
-            log.error("Error adding new layer for gateway {}", gateway.getName(), e);
-        }
+        persistDirectoryPath = extendedResource.createDirectory(persistDirectoryName);
+        LayerManager layerManager = new LayerManager(gateway, persistDirectoryPath, jedisCluster, cdrProcessor,
+                appProperties, errorCodeMappingConcurrentHashMap);
+        layerManagerMap.put(gateway.getNetworkId(), layerManager);
+        layerManager.connect();
     }
 
     public void updateErrorCodeMapping(String mnoId) {

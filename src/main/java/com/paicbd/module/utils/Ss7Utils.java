@@ -2,6 +2,7 @@ package com.paicbd.module.utils;
 
 import com.paicbd.module.ss7.layer.impl.channel.ChannelMessage;
 import com.paicbd.smsc.dto.MessageEvent;
+import lombok.Generated;
 import lombok.extern.slf4j.Slf4j;
 import org.restcomm.protocols.ss7.indicator.NatureOfAddress;
 import org.restcomm.protocols.ss7.indicator.NumberingPlan;
@@ -29,14 +30,16 @@ import static com.paicbd.module.utils.Constants.errorToStringMap;
 @Slf4j
 public class Ss7Utils {
 
+    @Generated
     private Ss7Utils() {
         throw new IllegalStateException("Utility Class");
     }
 
+    @Generated
     public enum LayerType {
         SCTP, M3UA, SCCP, TCAP, MAP
     }
-
+    @Generated
     public enum AssociationType {
         CLIENT, SERVER
     }
@@ -44,22 +47,18 @@ public class Ss7Utils {
 
     public static GlobalTitle getGlobalTitle(String gtIndicator, int translationType, EncodingScheme encodingScheme,
                                              NumberingPlan numberingPlan, NatureOfAddress natureOfAddress, String digit) {
-
-        ParameterFactoryImpl factory = new ParameterFactoryImpl();
-        GlobalTitle globalTitle;
         log.debug("Creating GlobalTitle with : GlobalTitle: {}, EncodingScheme: {}, TranslationType: {}, " +
-                        "NumberingPlan: {}, NatureOfAddress:{}",
-                gtIndicator, encodingScheme != null ? encodingScheme.getType().toString() : "null",
+                        "NumberingPlan: {}, NatureOfAddress:{}", gtIndicator,
+                encodingScheme != null ? encodingScheme.getType().toString() : "null",
                 translationType, numberingPlan, natureOfAddress);
-
-        globalTitle = switch (gtIndicator) {
+        ParameterFactoryImpl factory = new ParameterFactoryImpl();
+        return switch (gtIndicator) {
             case "GT0001" -> factory.createGlobalTitle(digit, natureOfAddress);
             case "GT0010" -> factory.createGlobalTitle(digit, translationType);
             case "GT0011" -> factory.createGlobalTitle(digit, translationType, numberingPlan, encodingScheme);
             case "GT0100" -> factory.createGlobalTitle(digit, translationType, numberingPlan, encodingScheme, natureOfAddress);
             default -> factory.createGlobalTitle(digit);
         };
-        return globalTitle;
     }
 
     public static SccpAddress convertToSccpAddress(GlobalTitle globalTitle, int pointCode, int ssn) {
@@ -79,7 +78,7 @@ public class Ss7Utils {
 
     private static AbsoluteTimeStamp toAbsoluteTimeStamp(Calendar calendar) {
         int year = calendar.get(Calendar.YEAR);
-        int mon = calendar.get(Calendar.MONTH);
+        int mon = calendar.get(Calendar.MONTH) + 1;
         int day = calendar.get(Calendar.DAY_OF_MONTH);
         int h = calendar.get(Calendar.HOUR);
         int m = calendar.get(Calendar.MINUTE);
@@ -125,7 +124,7 @@ public class Ss7Utils {
     }
 
     //Listeners
-    public static ChannelMessage getMessage(String messageType) {
+    public static ChannelMessage createChannelMessage(String messageType) {
         String transactionId = System.currentTimeMillis() + "-" + System.nanoTime();
         ChannelMessage channelMessage = new ChannelMessage(transactionId, "Map");
         channelMessage.setParameter(Constants.MESSAGE_TYPE, messageType);

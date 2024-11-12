@@ -12,6 +12,8 @@ import com.paicbd.module.utils.Ss7Utils;
 import com.paicbd.smsc.exception.RTException;
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.IOException;
+
 
 @Slf4j
 public class LayerFactory {
@@ -23,24 +25,23 @@ public class LayerFactory {
     public static ILayer createLayerInstance(String name, Ss7Utils.LayerType layerType,
                                              Gateway gateway, String persistDir,
                                              ILayer... transportLayerName) throws RTException {
-        ILayer layerInterface = null;
-
         try {
-            layerInterface = switch (layerType) {
-                case SCTP -> new SctpLayer(name, gateway.getSettingsM3UA(), persistDir);
+            return switch (layerType) {
+                case SCTP ->
+                        new SctpLayer(name, gateway.getSettingsM3UA(), persistDir);
                 case M3UA ->
                         new M3uaLayer(name, gateway.getSettingsM3UA(), (SctpLayer) transportLayerName[0], persistDir);
                 case SCCP ->
                         new SccpLayer(name, gateway.getSettingsSCCP(), (M3uaLayer) transportLayerName[0], persistDir);
                 case TCAP ->
                         new TcapLayer(name, gateway.getSettingsTCAP(), (SccpLayer) transportLayerName[0], persistDir);
-                case MAP -> new MapLayer(name, (TcapLayer) transportLayerName[0], persistDir);
+                case MAP ->
+                        new MapLayer(name, (TcapLayer) transportLayerName[0], persistDir);
             };
         } catch (Exception e) {
             log.error("Caught exception while initializing layer {} ", name, e);
             throw new RTException("Caught exception while initializing layer", e);
         }
-        return layerInterface;
     }
 
 }
