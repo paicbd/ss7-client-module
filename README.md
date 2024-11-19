@@ -1,6 +1,6 @@
 # SS7 Client Module
 
-The `ss7-client-module` is a crucial component within the Short Message Service Center (SMSC) environment, specifically designed for handling SS7 (Signaling System No. 7) communications. This module facilitates the signaling and transport of messages between the SMSC and telecommunication networks, ensuring efficient and reliable message delivery.
+The `ss7-client-module` is a crucial component within the Short Message Service Center (SMSC) environment, specifically designed for handling Signaling System No. 7 (SS7) communications. This module facilitates the signaling and transport of messages between the SMSC and telecommunication networks, ensuring efficient and reliable message delivery.
 
 ## Key Responsibilities
 - **SS7 Signaling**: Manages SS7 signaling messages for SMS delivery, providing connectivity and communication with telecommunication networks (MNO/MVNO).
