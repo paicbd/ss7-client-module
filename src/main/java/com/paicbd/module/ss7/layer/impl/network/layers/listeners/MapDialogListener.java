@@ -112,7 +112,7 @@ public class MapDialogListener implements MAPDialogListener {
 
     @Override
     public void onDialogRelease(MAPDialog mapDialog) {
-        ChannelMessage channelMessage = Ss7Utils.createChannelMessage("onDialogRelease");
+        ChannelMessage channelMessage = Ss7Utils.createChannelMessage(Constants.ON_DIALOG_RELEASE);
         channelMessage.setParameter(Constants.DIALOG, mapDialog);
         this.channelHandler.receiveMessageFromListener(channelMessage);
     }

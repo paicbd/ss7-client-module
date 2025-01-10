@@ -1,11 +1,13 @@
 package com.paicbd.module.utils;
 
+import com.paicbd.smsc.utils.Generated;
 import lombok.Getter;
 import org.jsmpp.bean.NumberingPlanIndicator;
 import org.restcomm.protocols.ss7.indicator.NumberingPlan;
 import org.restcomm.protocols.ss7.map.api.smstpdu.NumberingPlanIdentification;
 
 @Getter
+@Generated
 public enum CustomNumberingPlanIndicator {
 
     UNKNOWN(NumberingPlanIndicator.UNKNOWN, NumberingPlan.UNKNOWN, org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan.unknown, NumberingPlanIdentification.Unknown),

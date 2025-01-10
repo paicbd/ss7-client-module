@@ -1,11 +1,13 @@
 package com.paicbd.module.utils;
 
+import com.paicbd.smsc.utils.Generated;
 import lombok.Getter;
 import org.jsmpp.bean.TypeOfNumber;
 import org.restcomm.protocols.ss7.indicator.NatureOfAddress;
 import org.restcomm.protocols.ss7.map.api.primitives.AddressNature;
 
 @Getter
+@Generated
 public enum CustomTypeOfNumber {
 
     UNKNOWN(TypeOfNumber.UNKNOWN, NatureOfAddress.UNKNOWN, AddressNature.unknown, org.restcomm.protocols.ss7.map.api.smstpdu.TypeOfNumber.Unknown),

@@ -85,7 +85,7 @@ class Ss7UtilsTest {
     @ParameterizedTest
     @MethodSource("epochUtcTimeToAbsoluteParameters")
     @DisplayName("""
-            epochUtcTimeToAbsoluteTimeStampImpl when provide an epoch formated date via a Long number 
+            epochUtcTimeToAbsoluteTimeStampImpl when provide an epoch formated date via a Long number
             Then return the date in the AbsoluteTimeStamp type
             """)
     void epochUtcTimeToAbsoluteTimeStampImplWhenEpochThenReturnAbsoluteTime(long inputTime, TimeOfCalendar value, int expectedDateValue) {

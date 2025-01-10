@@ -23,15 +23,19 @@ import org.restcomm.protocols.ss7.map.api.MAPApplicationContextVersion;
 import org.restcomm.protocols.ss7.map.api.MAPException;
 import org.restcomm.protocols.ss7.map.api.MAPProvider;
 import org.restcomm.protocols.ss7.map.api.errors.AbsentSubscriberDiagnosticSM;
+import org.restcomm.protocols.ss7.map.api.errors.CallBarringCause;
 import org.restcomm.protocols.ss7.map.api.errors.MAPErrorMessage;
+import org.restcomm.protocols.ss7.map.api.errors.SMEnumeratedDeliveryFailureCause;
 import org.restcomm.protocols.ss7.map.api.primitives.AddressNature;
 import org.restcomm.protocols.ss7.map.api.primitives.AddressString;
 import org.restcomm.protocols.ss7.map.api.primitives.IMSI;
 import org.restcomm.protocols.ss7.map.api.primitives.ISDNAddressString;
 import org.restcomm.protocols.ss7.map.api.primitives.LMSI;
+import org.restcomm.protocols.ss7.map.api.primitives.NetworkResource;
 import org.restcomm.protocols.ss7.map.api.primitives.NumberingPlan;
 import org.restcomm.protocols.ss7.map.api.service.sms.LocationInfoWithLMSI;
 import org.restcomm.protocols.ss7.map.api.service.sms.MAPDialogSms;
+import org.restcomm.protocols.ss7.map.api.service.sms.MWStatus;
 import org.restcomm.protocols.ss7.map.api.service.sms.MoForwardShortMessageRequest;
 import org.restcomm.protocols.ss7.map.api.service.sms.MtForwardShortMessageRequest;
 import org.restcomm.protocols.ss7.map.api.service.sms.ReportSMDeliveryStatusRequest;
@@ -113,7 +117,7 @@ public class MapServer extends MapListener {
     private static final Functionality AS_FUNCTIONALITY = Functionality.valueOf("IPSP");
     private static final int ROUTING_CONTEXT = 101;
     private static final int NETWORK_APPEARANCE = 102;
-    private static final int DELIVERY_TRANSFER_MESSAGE_THREAD_COUNT = Runtime.getRuntime().availableProcessors() * 2;
+    private static final int DELIVERY_TRANSFER_MESSAGE_THREAD_COUNT = 1;
     private static final String SERVER_ASSOCIATION_NAME = "serverAssociation";
     private static final String SERVER_NAME = "mockServer";
 
@@ -134,10 +138,13 @@ public class MapServer extends MapListener {
     private MAPProvider mapProvider;
 
     @Setter
-    private SRIReaction sriReaction = SRIReaction.RETURN_SUCCESS;
+    private SendRoutingInfoForSmReaction sendRoutingInfoForSmReaction = SendRoutingInfoForSmReaction.RETURN_SUCCESS;
 
     @Setter
-    private MtFSMReaction mtFSMReaction = MtFSMReaction.RETURN_SUCCESS;
+    private MtForwardSmReaction mtForwardSMReaction = MtForwardSmReaction.RETURN_SUCCESS;
+
+    @Setter
+    private InformServiceCentreReaction informServiceCentreReaction = InformServiceCentreReaction.MWD_NO;
 
     public void initializeStack(IpChannelType ipChannelType) throws Exception {
         this.initSCTP(ipChannelType);
@@ -258,16 +265,32 @@ public class MapServer extends MapListener {
 
     @Override
     public void onSendRoutingInfoForSMRequest(SendRoutingInfoForSMRequest sendRoutingInfoForSMRequestIndication) {
-        log.debug("onSendRoutingInfoForSMRequest for DialogId={}, MapProvider={}, sriReaction={}", sendRoutingInfoForSMRequestIndication
-                .getMAPDialog().getLocalDialogId(), mapProvider, sriReaction);
+        log.debug("onSendRoutingInfoForSMRequest for DialogId={}, MapProvider={}, sendRoutingInfoForSmReaction={}", sendRoutingInfoForSMRequestIndication
+                .getMAPDialog().getLocalDialogId(), mapProvider, sendRoutingInfoForSmReaction);
 
         try {
             long invokeId = sendRoutingInfoForSMRequestIndication.getInvokeId();
             MAPDialogSms mapDialogSms = sendRoutingInfoForSMRequestIndication.getMAPDialog();
-            switch (sriReaction) {
+            switch (sendRoutingInfoForSmReaction) {
                 case RETURN_SUCCESS -> sriHandlerBySuccessRate(mapDialogSms, invokeId);
                 case ERROR_ABSENT_SUBSCRIBER -> mapHandlerByAbsentSubscriber(mapDialogSms, invokeId);
+                case ERROR_CALL_BARRED -> sriHandlerByCallBarred(mapDialogSms, invokeId);
+                default -> throw new IllegalStateException("Unexpected value: " + sendRoutingInfoForSmReaction);
             }
+
+            if (this.informServiceCentreReaction != InformServiceCentreReaction.MWD_NO) {
+                MWStatus mwStatus = switch (this.informServiceCentreReaction) {
+                    case InformServiceCentreReaction.MWD_MNRF ->
+                            mapProvider.getMAPParameterFactory().createMWStatus(false, true, false, false);
+                    case InformServiceCentreReaction.MWD_MCEF ->
+                            mapProvider.getMAPParameterFactory().createMWStatus(false, false, true, false);
+                    default -> null;
+                };
+                if (mwStatus != null) {
+                    mapDialogSms.addInformServiceCentreRequest(null, mwStatus, null, null, null);
+                }
+            }
+            mapDialogSms.close(false);
         } catch (MAPException e) {
             log.error("Error while sending SendRoutingInfoForSMRequest ", e);
         }
@@ -281,10 +304,15 @@ public class MapServer extends MapListener {
             long invokeId = mtForwardShortMessageRequestIndication.getInvokeId();
             MAPDialogSms mapDialogSms = mtForwardShortMessageRequestIndication.getMAPDialog();
             mapDialogSms.setUserObject(invokeId);
-            switch (mtFSMReaction) {
+            switch (mtForwardSMReaction) {
                 case RETURN_SUCCESS -> mtHandlerBySuccessRate(mapDialogSms, invokeId);
                 case ERROR_ABSENT_SUBSCRIBER -> mapHandlerByAbsentSubscriber(mapDialogSms, invokeId);
+                case ERROR_SYSTEM_FAILURE -> mapHandlerBySystemFailure(mapDialogSms, invokeId);
+                case ERROR_SYSTEM_FAILURE_MEMORY_CAPACITY_EXCEEDED ->
+                        mapHandlerBySystemFailureMemoryCapacityExceeded(mapDialogSms, invokeId);
+                case ERROR_SYSTEM_FAILURE_UNKNOWN_SERVICE_CENTRE -> mapHandlerByBySystemFailureUnknownServiceCentre(mapDialogSms, invokeId);
             }
+            mapDialogSms.close(false);
         } catch (MAPException e) {
             log.error("Error while sending MtForwardShortMessageRequest result ", e);
         }
@@ -338,8 +366,12 @@ public class MapServer extends MapListener {
         IMSI imsi = new IMSIImpl("748031234567890");
         LocationInfoWithLMSI locationInfoWithLMSI = getLocationInfoWithLMSI();
         mapDialogSms.addSendRoutingInfoForSMResponse(invokeId, imsi, locationInfoWithLMSI, null, null, null);
-        mapDialogSms.setUserObject(invokeId);
-        mapDialogSms.close(false);
+    }
+
+    private void sriHandlerByCallBarred(MAPDialogSms mapDialogSms, long invokeId) throws MAPException {
+        MAPErrorMessage mapErrorMessage = mapProvider.getMAPErrorMessageFactory().createMAPErrorMessageCallBarred(
+                (long) mapDialogSms.getApplicationContext().getApplicationContextVersion().getVersion(), CallBarringCause.operatorBarring, null, null);
+        mapDialogSms.sendErrorComponent(invokeId, mapErrorMessage);
     }
 
     private void mtHandlerBySuccessRate(MAPDialogSms mapDialogSms, long invokeId) throws MAPException {
@@ -347,14 +379,33 @@ public class MapServer extends MapListener {
         ReturnResultLast returnResultLast = new ReturnResultLastImpl();
         returnResultLast.setInvokeId(invokeId);
         mapDialogSms.sendReturnResultLastComponent(returnResultLast);
-        mapDialogSms.close(false);
     }
 
     private void mapHandlerByAbsentSubscriber(MAPDialogSms mapDialogSms, long invokeId) throws MAPException {
         MAPErrorMessage mapErrorMessage = mapProvider.getMAPErrorMessageFactory().createMAPErrorMessageAbsentSubscriberSM(
                 AbsentSubscriberDiagnosticSM.IMSIDetached, null, null);
         mapDialogSms.sendErrorComponent(invokeId, mapErrorMessage);
-        mapDialogSms.close(false);
+    }
+
+    private void mapHandlerBySystemFailure(MAPDialogSms mapDialogSms, long invokeId) throws MAPException {
+        MAPErrorMessage mapErrorMessage = mapProvider.getMAPErrorMessageFactory().createMAPErrorMessageSystemFailure(
+                mapDialogSms.getApplicationContext().getApplicationContextVersion().getVersion(),
+                NetworkResource.vmsc, null, null);
+        mapDialogSms.sendErrorComponent(invokeId, mapErrorMessage);
+    }
+
+    private void mapHandlerBySystemFailureMemoryCapacityExceeded(MAPDialogSms mapDialogSms, long invokeId) throws MAPException {
+        MAPErrorMessage mapErrorMessage = mapProvider.getMAPErrorMessageFactory().createMAPErrorMessageSMDeliveryFailure(
+                mapDialogSms.getApplicationContext().getApplicationContextVersion().getVersion(),
+                SMEnumeratedDeliveryFailureCause.memoryCapacityExceeded, null, null);
+        mapDialogSms.sendErrorComponent(invokeId, mapErrorMessage);
+    }
+
+    private void mapHandlerByBySystemFailureUnknownServiceCentre(MAPDialogSms mapDialogSms, long invokeId) throws MAPException {
+        MAPErrorMessage mapErrorMessage = mapProvider.getMAPErrorMessageFactory().createMAPErrorMessageSMDeliveryFailure(
+                mapDialogSms.getApplicationContext().getApplicationContextVersion().getVersion(),
+                SMEnumeratedDeliveryFailureCause.unknownServiceCentre, null, null);
+        mapDialogSms.sendErrorComponent(invokeId, mapErrorMessage);
     }
 
     public void sendMoForwardShortMessage(SmsTpduType type, DataCodingSchemeImpl dataCodingScheme) throws MAPException {
