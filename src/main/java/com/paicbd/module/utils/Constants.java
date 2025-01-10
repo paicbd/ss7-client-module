@@ -48,10 +48,8 @@ public class Constants {
     public static final String LOCAL_ORIGINATED = "localOriginated";
     public static final String MAP_EXTENSION_CONTAINER = "mapExtensionContainer";
     public static final String ON_DIALOG_CLOSE = "onDialogClose";
+    public static final String ON_DIALOG_RELEASE = "onDialogRelease";
     public static final String ON_DIALOG_TIMEOUT = "onDialogTimeout";
-    public static final String TCAP_MESSAGE_TYPE = "TCAP_EVENT_TYPE";
-    public static final String TCAP_MESSAGE = "TCAP_MESSAGE";
-    public static final String TCAP_MESSAGE_DIALOG = "TCAP_MESSAGE_DIALOG";
     protected static final Map<Long, String> errorToStringMap;
 
     static {

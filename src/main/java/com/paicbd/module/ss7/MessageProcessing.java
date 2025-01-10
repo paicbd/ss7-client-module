@@ -1,12 +1,14 @@
 package com.paicbd.module.ss7;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.paicbd.module.dto.Gateway;
+import com.paicbd.module.dto.MapRoutingData;
+import com.paicbd.module.dto.MessageTransferData;
 import com.paicbd.module.ss7.layer.impl.channel.ChannelMessage;
 import com.paicbd.module.ss7.layer.impl.network.layers.MapLayer;
 import com.paicbd.module.utils.Constants;
 import com.paicbd.module.utils.CustomNumberingPlanIndicator;
 import com.paicbd.module.utils.CustomTypeOfNumber;
+import com.paicbd.module.utils.MessageTransferType;
 import com.paicbd.module.utils.Ss7Utils;
 import com.paicbd.smsc.cdr.CdrProcessor;
 import com.paicbd.smsc.dto.ErrorCodeMapping;
@@ -21,14 +23,19 @@ import org.restcomm.protocols.ss7.map.api.MAPApplicationContextName;
 import org.restcomm.protocols.ss7.map.api.MAPDialog;
 import org.restcomm.protocols.ss7.map.api.MAPException;
 import org.restcomm.protocols.ss7.map.api.MAPMessageType;
+import org.restcomm.protocols.ss7.map.api.errors.MAPErrorCode;
 import org.restcomm.protocols.ss7.map.api.errors.MAPErrorMessage;
+import org.restcomm.protocols.ss7.map.api.errors.SMEnumeratedDeliveryFailureCause;
 import org.restcomm.protocols.ss7.map.api.primitives.AddressString;
 import org.restcomm.protocols.ss7.map.api.primitives.IMSI;
 import org.restcomm.protocols.ss7.map.api.service.sms.AlertServiceCentreRequest;
+import org.restcomm.protocols.ss7.map.api.service.sms.InformServiceCentreRequest;
 import org.restcomm.protocols.ss7.map.api.service.sms.LocationInfoWithLMSI;
 import org.restcomm.protocols.ss7.map.api.service.sms.MAPDialogSms;
+import org.restcomm.protocols.ss7.map.api.service.sms.MWStatus;
 import org.restcomm.protocols.ss7.map.api.service.sms.MoForwardShortMessageRequest;
 import org.restcomm.protocols.ss7.map.api.service.sms.MtForwardShortMessageResponse;
+import org.restcomm.protocols.ss7.map.api.service.sms.SMDeliveryOutcome;
 import org.restcomm.protocols.ss7.map.api.service.sms.SendRoutingInfoForSMResponse;
 import org.restcomm.protocols.ss7.map.api.service.sms.SmsSignalInfo;
 import org.restcomm.protocols.ss7.map.api.smstpdu.DataCodingScheme;
@@ -46,9 +53,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -65,11 +69,7 @@ public class MessageProcessing {
     private final CdrProcessor cdrProcessor;
     private final ConcurrentMap<String, List<ErrorCodeMapping>> errorCodeMappingConcurrentHashMap;
     private final MessageFactory messageFactory;
-
-    private static final ConcurrentHashMap<Long, MessageEvent> messageSriConcurrentHashMap = new ConcurrentHashMap<>(128, 0.75f, 100);
-    private static final ConcurrentHashMap<Long, MessageEvent> messageMtConcurrentHashMap = new ConcurrentHashMap<>(128, 0.75f, 100);
-    private final ThreadFactory factory = Thread.ofVirtual().name("MessageProcessing - ").factory();
-    private final ExecutorService executorService = Executors.newThreadPerTaskExecutor(factory);
+    private final ConcurrentMap<String, MessageEvent> messageEventConcurrentMap = new ConcurrentHashMap<>();
 
     AtomicInteger sriRequestPerSecond = new AtomicInteger(0);
     AtomicInteger sriResponsePerSecond = new AtomicInteger(0);
@@ -101,6 +101,11 @@ public class MessageProcessing {
      * @param message The message that caused the timeout error.
      */
     public void sendMessage(MessageEvent message) {
+        if (message.isNetworkNotifyError()) {
+            this.setMessageAsNetworkNotifyError(message);
+            this.sendToRetry(0L, message);
+            return;
+        }
         if (Objects.isNull(message.getImsi())) {
             sendRoutingInfoForSMRequest(message);
         } else {
@@ -126,10 +131,14 @@ public class MessageProcessing {
                 this.processAlertServiceCentreRequest(alertServiceCentreRequest);
                 break;
 
-
             case MAPMessageType.moForwardSM_Request:
                 MoForwardShortMessageRequest mtForwardShortMessageRequest = (MoForwardShortMessageRequest) channelMessage.getParameter(Constants.MESSAGE);
                 this.processMoMessages(mtForwardShortMessageRequest);
+                break;
+
+            case MAPMessageType.InformServiceCentre_Request:
+                InformServiceCentreRequest informServiceCentreRequest = (InformServiceCentreRequest) channelMessage.getParameter(Constants.MESSAGE);
+                this.processInformServiceCentreRequest(informServiceCentreRequest);
                 break;
 
             default:
@@ -149,7 +158,8 @@ public class MessageProcessing {
         }
 
         if (Constants.ON_INVOKE_TIMEOUT.equals(messageType)) {
-            MessageEvent message = removeMessageFromConcurrentHashMaps(mapDialog.getLocalDialogId());
+            MessageTransferData messageTransferData = (MessageTransferData) mapDialog.getUserObject();
+            MessageEvent message = messageTransferData.getMessageEvent();
             if (Objects.isNull(message)) {
                 log.error("Timeout error occurred for dialog ID {}. No message found in the ConcurrentHashMaps.", mapDialog.getLocalDialogId());
                 return;
@@ -161,108 +171,87 @@ public class MessageProcessing {
         this.processErrorComponent(mapDialog, mapErrorMessage);
     }
 
+    public void processDialog(ChannelMessage channelMessage) {
+        MAPDialog mapDialog = (MAPDialog) channelMessage.getParameter(Constants.DIALOG);
+        MessageTransferData messageTransferData = (MessageTransferData) mapDialog.getUserObject();
+        if (Objects.isNull(messageTransferData)) {
+            return;
+        }
+        MessageEvent messageEvent = messageTransferData.getMessageEvent();
+        if (Objects.isNull(messageEvent)) {
+            log.error("No message event on processMessageTransferTypeSendRoutingInfo using DialogId -> {}", mapDialog.getLocalDialogId());
+            return;
+        }
+
+        if (MessageTransferType.SEND_ROUTING_INFO_FOR_SM.equals(messageTransferData.getMessageTransferType())) {
+            String id = messageTransferData.getMessageEvent().getId();
+            if (Objects.nonNull(messageEventConcurrentMap.remove(id))) {
+                this.processDialogTypeSendRoutingInfo(messageTransferData);
+            }
+        }
+    }
+
     private void sendRoutingInfoForSMRequest(MessageEvent message) {
-        long localDialogId = 0;
         try {
             var mapDialogSms = this.messageFactory.createSendRoutingInfoForSMRequestFromMessageEvent(message);
-            localDialogId = mapDialogSms.getLocalDialogId();
-            messageSriConcurrentHashMap.put(localDialogId, message);
+            MapRoutingData mapRoutingData = new MapRoutingData();
+            MessageTransferData messageTransferData = new MessageTransferData(MessageTransferType.SEND_ROUTING_INFO_FOR_SM, message, mapRoutingData);
+            mapDialogSms.setUserObject(messageTransferData);
             checkCongestion();
+            messageEventConcurrentMap.put(message.getId(), message);
             mapDialogSms.send();
             sriRequestPerSecond.incrementAndGet();
-            this.processCdr(message, UtilsEnum.MessageType.MESSAGE, UtilsEnum.CdrStatus.SENT, "", false);
-
+            this.processCdr(message, UtilsEnum.CdrStatus.SENT, "", false);
         } catch (Exception ex) {
             log.error("Error on sendRoutingInfoForSMRequest {}", ex.getMessage(), ex);
-            messageSriConcurrentHashMap.remove(localDialogId);
-            this.processCdr(message, UtilsEnum.MessageType.MESSAGE, UtilsEnum.CdrStatus.FAILED, "ERROR ON SEND SRI", true);
+            this.processCdr(message, UtilsEnum.CdrStatus.FAILED, "ERROR ON SEND SRI DUE TO " + ex.getMessage(), true);
         }
     }
 
     private void processSendRoutingInfoForSmResponse(SendRoutingInfoForSMResponse sendRoutingInfoForSMResponse) {
+        MessageTransferData messageTransferData = (MessageTransferData) sendRoutingInfoForSMResponse.getMAPDialog().getUserObject();
+        MapRoutingData mapRoutingData = messageTransferData.getMapRoutingData();
+        mapRoutingData.setImsi(sendRoutingInfoForSMResponse.getIMSI());
+        mapRoutingData.setMwdSet(sendRoutingInfoForSMResponse.getMwdSet());
+        mapRoutingData.setIpSmGwGuidance(sendRoutingInfoForSMResponse.getIpSmGwGuidance());
+        mapRoutingData.setLocationInfoWithLMSI(sendRoutingInfoForSMResponse.getLocationInfoWithLMSI());
         sriResponsePerSecond.incrementAndGet();
-        MessageEvent message = messageSriConcurrentHashMap.remove(sendRoutingInfoForSMResponse.getMAPDialog().getLocalDialogId());
-        if (Objects.isNull(message)) {
-            log.error("No message on messageSriConcurrentHashMap using DialogId -> {}", sendRoutingInfoForSMResponse.getMAPDialog().getLocalDialogId());
-            return;
-        }
-        IMSI imsi = sendRoutingInfoForSMResponse.getIMSI();
-        LocationInfoWithLMSI locationInfoWithLMSI = sendRoutingInfoForSMResponse.getLocationInfoWithLMSI();
-        AddressString networkNodeNumber = locationInfoWithLMSI.getNetworkNodeNumber();
-        message.setImsi(imsi.getData());
-        message.setNetworkNodeNumber(networkNodeNumber.getAddress());
-        message.setNetworkNodeNumberNatureOfAddress((int) CustomTypeOfNumber.fromPrimitive(networkNodeNumber.getAddressNature()).getSmscValue().value());
-        message.setNetworkNodeNumberNumberingPlan((int) CustomNumberingPlanIndicator.fromPrimitive(networkNodeNumber.getNumberingPlan()).getSmscValue().value());
+    }
 
-        if (message.isDropMapSri()) {
-            this.processActionDropMapSri(message, networkNodeNumber);
-            return;
-        }
-
-        if (message.isCheckSriResponse()) {
-            message.setSriResponse(true);
-            message.setOriginNetworkId(message.getDestNetworkId());
-            this.putMessageOnSpecificList(redisMessageList, message);
-            return;
-        }
-
-        if (message.getNetworkIdToMapSri() == -1 || message.getNetworkIdToMapSri() == 0) { // Send MT Forward SM to the same network, 0 mean is a DLR
-            if (message.getMessageParts() != null) {
-                message.getMessageParts().forEach(msgPart -> {
-                    var messageEvent = new MessageEvent().clone(message);
-                    messageEvent.setMessageId(msgPart.getMessageId());
-                    messageEvent.setShortMessage(msgPart.getShortMessage());
-                    messageEvent.setMsgReferenceNumber(msgPart.getMsgReferenceNumber());
-                    messageEvent.setTotalSegment(msgPart.getTotalSegment());
-                    messageEvent.setSegmentSequence(msgPart.getSegmentSequence());
-                    messageEvent.setUdhJson(msgPart.getUdhJson());
-                    messageEvent.setOptionalParameters(msgPart.getOptionalParameters());
-                    this.sendMtForwardSMRequest(messageEvent);
-                });
-                return;
-            }
-            this.sendMtForwardSMRequest(message);
-            return;
-        }
-
-        int networkIdToReroute = message.getNetworkIdToMapSri();
-        message.setDestNetworkId(networkIdToReroute);
-        this.putMessageOnNetworkIdList(networkIdToReroute, message);
+    private void processInformServiceCentreRequest(InformServiceCentreRequest informServiceCentreRequest) {
+        MessageTransferData messageTransferData = (MessageTransferData) informServiceCentreRequest.getMAPDialog().getUserObject();
+        MapRoutingData mapRoutingData = messageTransferData.getMapRoutingData();
+        mapRoutingData.setInformServiceCenterData(true);
+        mapRoutingData.setStoredMSISDN(informServiceCentreRequest.getStoredMSISDN());
+        mapRoutingData.setMwStatus(informServiceCentreRequest.getMwStatus());
+        mapRoutingData.setAbsentSubscriberDiagnosticSM(informServiceCentreRequest.getAbsentSubscriberDiagnosticSM());
+        mapRoutingData.setAdditionalAbsentSubscriberDiagnosticSM(informServiceCentreRequest.getAdditionalAbsentSubscriberDiagnosticSM());
     }
 
     private void sendMtForwardSMRequest(MessageEvent message) {
-        var cdrMessageType = (message.isDlr()) ? UtilsEnum.MessageType.DELIVER : UtilsEnum.MessageType.MESSAGE;
-        long localDialogId = 0;
         try {
             var mapDialogSms = messageFactory.createMtForwardSMRequestFromMessageEvent(message);
-            localDialogId = mapDialogSms.getLocalDialogId();
-            messageMtConcurrentHashMap.put(localDialogId, message);
+            MessageTransferData messageTransferData = new MessageTransferData(MessageTransferType.SEND_MT_FORWARD_SM, message, null);
+            mapDialogSms.setUserObject(messageTransferData);
             mapDialogSms.send();
             mtRequestPerSecond.incrementAndGet();
-            this.processCdr(message, cdrMessageType, UtilsEnum.CdrStatus.SENT, "", false);
+            this.processCdr(message, UtilsEnum.CdrStatus.SENT, "", false);
         } catch (Exception ex) {
             log.error("Error on sendMtForwardSMRequest {}", ex.getMessage(), ex);
-            messageMtConcurrentHashMap.remove(localDialogId);
-            this.processCdr(message, cdrMessageType, UtilsEnum.CdrStatus.FAILED, "ERROR ON SEND MT", false);
+            this.processCdr(message, UtilsEnum.CdrStatus.FAILED, "ERROR ON SEND MT DUE TO " + ex.getMessage(), true);
         }
     }
 
     private void processMtForwardSMResponse(MtForwardShortMessageResponse mtForwardShortMessageResponse) {
-        long localDialogId = mtForwardShortMessageResponse.getMAPDialog().getLocalDialogId();
-        MessageEvent sent = messageMtConcurrentHashMap.remove(localDialogId);
+        MessageTransferData messageTransferData = (MessageTransferData) mtForwardShortMessageResponse.getMAPDialog().getUserObject();
+        MessageEvent sent = messageTransferData.getMessageEvent();
         if (Objects.isNull(sent)) {
-            log.warn("No Message found for localId {}", localDialogId);
+            log.warn("No Message found for localId {}", mtForwardShortMessageResponse.getMAPDialog().getLocalDialogId());
             return;
         }
         this.messageFactory.setSccpFieldsToMessage(sent, mtForwardShortMessageResponse.getMAPDialog());
-        var messageTypeCdr = UtilsEnum.MessageType.MESSAGE;
-        if (sent.isDlr()) {
-            messageTypeCdr = UtilsEnum.MessageType.DELIVER;
-        }
-        this.processCdr(sent, messageTypeCdr, UtilsEnum.CdrStatus.SENT, "", true);
-        if ((!sent.isDlr()) &&  (sent.getRegisteredDelivery() == RequestDelivery.REQUEST_DLR.getValue()) ) {
-            this.prepareAndSendDlr(sent, null, null);
-        }
+        this.processCdr(sent, UtilsEnum.CdrStatus.SENT, "", true);
+        this.prepareAndSendDlr(sent, null, null);
     }
 
     private void processMoMessages(MoForwardShortMessageRequest moForwardShortMessageRequestIndication) {
@@ -303,7 +292,7 @@ public class MessageProcessing {
             MessageEvent messageMo = messageFactory.createMessageEventFromMoForwardShortMessageRequest(moForwardShortMessageRequestIndication, smsSubmitTpdu);
             messageMo.setOriginNetworkId(this.currentGateway.getNetworkId());
             this.moRequestPerSecond.incrementAndGet();
-            this.processCdr(messageMo, UtilsEnum.MessageType.MESSAGE, UtilsEnum.CdrStatus.RECEIVED, "", false);
+            this.processCdr(messageMo, UtilsEnum.CdrStatus.RECEIVED, "", false);
             this.putMessageOnSpecificList(redisMessageList, messageMo);
         } else {
             log.error("DataCodingScheme: {} is not sported only GSM7 and USC2 are supported.",
@@ -326,14 +315,17 @@ public class MessageProcessing {
                 return;
             }
 
-            hashMessage.forEach((keyHash, value) -> {
+            hashMessage.forEach((messageId, value) -> {
                 try {
                     log.debug("Processing message {}", value);
                     MessageEvent message = Converter.stringToObject(value, MessageEvent.class);
-                    executorService.submit(() -> this.sendMessage(message));
-                    jedisCluster.hdel(key, keyHash);
+                    //Setting Null
+                    message.setImsi(null);
+                    message.setNetworkNotifyError(false);
+                    this.sendMessage(message);
+                    jedisCluster.hdel(key, messageId);
                 } catch (Exception e) {
-                    log.error("Error on process message {} for Alert Service Center", keyHash);
+                    log.error("Error on process message {} for Alert Service Center", messageId);
                 }
             });
         } catch (Exception ex) {
@@ -341,6 +333,73 @@ public class MessageProcessing {
         }
     }
 
+    private void processDialogTypeSendRoutingInfo(MessageTransferData messageTransferData) {
+        MapRoutingData mapRoutingData = messageTransferData.getMapRoutingData();
+        MessageEvent message = messageTransferData.getMessageEvent();
+        if (Objects.nonNull(mapRoutingData.getMwStatus())) {
+            log.debug("Evaluating InformServiceCenter Message");
+            MWStatus mwStatus = mapRoutingData.getMwStatus();
+            if (mwStatus.getMnrfSet() || mwStatus.getMcefSet()) {
+                boolean isValidMessage = message.getValidityPeriod() > 0 && !message.isLastRetry();
+                if (isValidMessage) {
+                    SMDeliveryOutcome smDeliveryOutcome =
+                            mwStatus.getMnrfSet() ? SMDeliveryOutcome.absentSubscriber : SMDeliveryOutcome.memoryCapacityExceeded;
+                    this.setMessageAsNetworkNotifyError(message);
+                    this.sendReportSMDeliveryStatusRequest(message, smDeliveryOutcome);
+                }
+                this.sendToRetry(0L, message);
+                return;
+            }
+        }
+        this.processSendRoutingForSmResponseAction(mapRoutingData, message);
+    }
+
+
+    private void processSendRoutingForSmResponseAction(MapRoutingData mapRoutingData, MessageEvent message) {
+        IMSI imsi = mapRoutingData.getImsi();
+        LocationInfoWithLMSI locationInfoWithLMSI = mapRoutingData.getLocationInfoWithLMSI();
+        AddressString networkNodeNumber = locationInfoWithLMSI.getNetworkNodeNumber();
+        message.setImsi(imsi.getData());
+        message.setNetworkNodeNumber(networkNodeNumber.getAddress());
+        message.setNetworkNodeNumberNatureOfAddress((int) CustomTypeOfNumber.fromPrimitive(networkNodeNumber.getAddressNature()).getSmscValue().value());
+        message.setNetworkNodeNumberNumberingPlan((int) CustomNumberingPlanIndicator.fromPrimitive(networkNodeNumber.getNumberingPlan()).getSmscValue().value());
+
+
+        if (message.isDropMapSri()) {
+            this.processActionDropMapSri(message, networkNodeNumber);
+            return;
+        }
+
+        if (message.isCheckSriResponse()) {
+            message.setSriResponse(true);
+            message.setOriginNetworkId(message.getDestNetworkId());
+            this.putMessageOnSpecificList(redisMessageList, message);
+            return;
+        }
+
+        if (message.getNetworkIdToMapSri() == -1 || message.getNetworkIdToMapSri() == 0) { // Send MT Forward SM to the same network, 0 mean is a DLR
+            if (message.getMessageParts() != null) {
+                message.getMessageParts().forEach(msgPart -> {
+                    var messageEvent = new MessageEvent().clone(message);
+                    messageEvent.setMessageId(msgPart.getMessageId());
+                    messageEvent.setShortMessage(msgPart.getShortMessage());
+                    messageEvent.setMsgReferenceNumber(msgPart.getMsgReferenceNumber());
+                    messageEvent.setTotalSegment(msgPart.getTotalSegment());
+                    messageEvent.setSegmentSequence(msgPart.getSegmentSequence());
+                    messageEvent.setUdhJson(msgPart.getUdhJson());
+                    messageEvent.setOptionalParameters(msgPart.getOptionalParameters());
+                    this.sendMtForwardSMRequest(messageEvent);
+                });
+                return;
+            }
+            this.sendMtForwardSMRequest(message);
+            return;
+        }
+
+        int networkIdToReroute = message.getNetworkIdToMapSri();
+        message.setDestNetworkId(networkIdToReroute);
+        this.putMessageOnNetworkIdList(networkIdToReroute, message);
+    }
 
     private void processActionDropMapSri(MessageEvent message, AddressString networkNodeNumber) {
         String extraString = " imsi:" +
@@ -357,11 +416,18 @@ public class MessageProcessing {
     }
 
     private void prepareAndSendDlr(MessageEvent sent, Integer errorCode, String extraInformation) {
-        if (Objects.nonNull(sent)) {
+        //Removing the message from the absent_subscriber_hash table
+        if (sent.isNetworkNotifyError()) {
+            var key = sent.getMsisdn().concat(ABSENT_SUBSCRIBER_HASH_NAME);
+            log.debug("Removing from hash {} for message id {}", key, sent.getMessageId());
+            jedisCluster.hdel(key, sent.getMessageId());
+        }
+
+        if (!sent.isDlr() && sent.getRegisteredDelivery() == RequestDelivery.REQUEST_DLR.getValue()) {
             log.info("Prepare and send DLR for message {}", sent.getMessageId());
             ErrorCodeMapping errorCodeMapping = Objects.nonNull(errorCode) ? this.getErrorCodeMapping(errorCode) : null;
             var dlr = messageFactory.createDeliveryReceiptMessage(sent, errorCodeMapping, extraInformation);
-            processCdr(dlr, UtilsEnum.MessageType.DELIVER, UtilsEnum.CdrStatus.ENQUEUE, "", false);
+            processCdr(dlr, UtilsEnum.CdrStatus.ENQUEUE, "", false);
             switch (sent.getOriginProtocol().toUpperCase()) {
                 case "HTTP" -> this.putMessageOnSpecificList("http_dlr", dlr);
                 case "SMPP" -> {
@@ -386,127 +452,145 @@ public class MessageProcessing {
      */
     private void processInvokeTimeoutError(MessageEvent message, MAPErrorMessage mapErrorMessage) {
         log.warn("The error received is onInvokeTimeout, we will try to send the message again to the same networkId");
+        messageEventConcurrentMap.remove(message.getId());
         processCdr(message,
-                UtilsEnum.MessageType.MESSAGE,
                 UtilsEnum.CdrStatus.FAILED,
                 Ss7Utils.getMapErrorCodeToString(mapErrorMessage),
                 true);
-        executorService.submit(() -> sendToRetry(mapErrorMessage, message));
+        this.sendToRetry(mapErrorMessage.getErrorCode(), message);
     }
 
     private void processErrorComponent(MAPDialog mapDialog, MAPErrorMessage mapErrorMessage) {
         MAPApplicationContextName mapApplicationContextName = mapDialog.getApplicationContext().getApplicationContextName();
         if ((mapApplicationContextName == MAPApplicationContextName.shortMsgMTRelayContext) || (mapApplicationContextName == MAPApplicationContextName.shortMsgGatewayContext)) {
-            MessageEvent message = this.removeMessageFromConcurrentHashMaps(mapDialog.getLocalDialogId());
+            MessageTransferData messageTransferData = (MessageTransferData) mapDialog.getUserObject();
+            MessageEvent message = messageTransferData.getMessageEvent();
             if (message == null) {
                 log.error("No message found for dialog ID {} in the ConcurrentHashMaps", mapDialog.getLocalDialogId());
                 return;
             }
-
+            messageEventConcurrentMap.remove(message.getId());
             this.processCdr(message,
-                    UtilsEnum.MessageType.MESSAGE,
                     UtilsEnum.CdrStatus.FAILED,
                     Ss7Utils.getMapErrorCodeToString(mapErrorMessage),
                     true);
 
-            if (this.isPermanentError(mapErrorMessage)) {
-                log.warn("Permanent error on MTForwardSMRequest has been received for message {}, we will try to reroute the message to another network id defined on the message as networkIdToPermanentFailure", message.getMessageId());
-                this.processPermanentError(message, Math.toIntExact(mapErrorMessage.getErrorCode()));
+            if (this.isTempError(mapErrorMessage)) {
+                this.processTemporaryError(message, mapErrorMessage);
                 return;
             }
+            this.processPermanentError(message, mapErrorMessage.getErrorCode().intValue());
 
-            this.processTemporaryError(message, mapErrorMessage);
         }
     }
 
     private void processPermanentError(MessageEvent message, int errorCode) {
-        Integer networkIdToReroute = message.getNetworkIdToPermanentFailure() > 0 ? message.getNetworkIdToPermanentFailure() : null;
-        if (Objects.isNull(networkIdToReroute)) {
-            log.warn("No networkIdToReroute on message for permanent error");
-            prepareAndSendDlr(message, errorCode, null);
+        log.warn("Permanent error has been received for message {}, we will try to reroute the message to another network id defined on the message as networkIdToPermanentFailure", message.getMessageId());
+        int newDestinationNetworkId = message.getNetworkIdToPermanentFailure();
+        if (newDestinationNetworkId > 0) {
+            message.setNetworkNotifyError(false);
+            message.setDestNetworkId(newDestinationNetworkId);
+            this.putMessageOnNetworkIdList(newDestinationNetworkId, message);
             return;
         }
-        message.setDestNetworkId(networkIdToReroute);
-        this.putMessageOnNetworkIdList(networkIdToReroute, message);
+        log.warn("No networkIdToReroute on message for permanent error");
+        prepareAndSendDlr(message, errorCode, null);
     }
 
     private void processTemporaryError(MessageEvent message, MAPErrorMessage mapErrorMessage) {
-        Integer networkIdToRerouteTemp = message.getNetworkIdTempFailure() > 0 ? message.getNetworkIdToPermanentFailure() : null;
-        if (Objects.nonNull(networkIdToRerouteTemp)) {
-            log.warn("Temporary error on MTForwardSMRequest has been received for message {}, we will try to reroute the message to another network id defined on the message as networkIdToRerouteTemp", message.getMessageId());
-            message.setDestNetworkId(networkIdToRerouteTemp);
-            this.putMessageOnNetworkIdList(networkIdToRerouteTemp, message);
+        log.warn("Temporary error has been received for message {}, we will try to reroute the message to another network id defined on the message as networkIdTempFailure", message.getMessageId());
+        int newDestinationNetworkId = message.getNetworkIdTempFailure();
+        if (newDestinationNetworkId > 0) {
+            log.warn("No networkIdToReroute on message for temporary error");
+            message.setNetworkNotifyError(false);
+            message.setDestNetworkId(newDestinationNetworkId);
+            this.putMessageOnNetworkIdList(newDestinationNetworkId, message);
         } else {
             log.warn("The error received is temporary and no networkIdToRerouteTemp is defined on the message, we will try to send the message again to the same networkId");
-            boolean isAbsentSubscriber = isAbsentSubscriberError(mapErrorMessage);
-            if (message.getValidityPeriod() > 0 && !message.isLastRetry())
-                this.sendReportSMDeliveryStatusRequest(message, isAbsentSubscriber);
-            executorService.submit(() -> this.sendToRetry(mapErrorMessage, message));
+            boolean isNetworkNotifyError = this.isReportSMDeliveryStatusRequired(mapErrorMessage);
+            boolean isValidMessage = message.getValidityPeriod() > 0 && !message.isLastRetry();
+            if (isNetworkNotifyError && isValidMessage) {
+                SMDeliveryOutcome smDeliveryOutcome =
+                        mapErrorMessage.isEmAbsentSubscriberSM() ? SMDeliveryOutcome.absentSubscriber : SMDeliveryOutcome.memoryCapacityExceeded;
+                log.warn("Sending a ReportSMDeliveryStatusRequest with DeliveryOutcome {}for message Id {}", smDeliveryOutcome.name(), message.getMessageId());
+                this.setMessageAsNetworkNotifyError(message);
+                this.sendReportSMDeliveryStatusRequest(message, smDeliveryOutcome);
+            }
+            this.sendToRetry(mapErrorMessage.getErrorCode(), message);
         }
     }
 
-    private void sendReportSMDeliveryStatusRequest(MessageEvent message, boolean isAbsentSubscriber) {
+    private void sendReportSMDeliveryStatusRequest(MessageEvent message, SMDeliveryOutcome smDeliveryOutcome) {
         try {
-            MAPDialogSms mapDialogSms = messageFactory.createReportSMDeliveryStatusRequestFromMessageEvent(message, isAbsentSubscriber);
+            MAPDialogSms mapDialogSms = messageFactory.createReportSMDeliveryStatusRequestFromMessageEvent(message, smDeliveryOutcome);
             mapDialogSms.send();
         } catch (Exception ex) {
             log.error("Error on handler prepareForRetry {}", ex.getMessage(), ex);
         }
     }
 
-    private void sendToRetry(MAPErrorMessage mapErrorMessage, MessageEvent message) {
+    private void sendToRetry(long mapErrorCode, MessageEvent message) {
         try {
             log.warn("Starting auto retry validation process for message_id {}", message.getMessageId());
-            message.setRetryNumber(Objects.isNull(message.getRetryNumber()) ? 1 : message.getRetryNumber() + 1);
-            message.setNetworkNotifyError(true);
-            message.setRetry(true);
 
             if (message.getValidityPeriod() == 0) {
                 log.warn("The message with messageId {} won't be retried because the validity period is 0", message.getMessageId());
-                this.prepareAndSendDlr(message, Math.toIntExact(mapErrorMessage.getErrorCode()), null);
+                this.prepareAndSendDlr(message, (int) mapErrorCode, null);
                 return;
             }
 
             if (message.isLastRetry()) {
                 log.warn("Is Last Retry for message {}, preparing and sending DLR from sendToRetryProcess", message.getId());
-                this.prepareAndSendDlr(message, Math.toIntExact(mapErrorMessage.getErrorCode()), null);
-            } else {
-                log.warn("Retry number {} for message: {}", message.getRetryNumber(), message);
-                processCdr(message,
-                        UtilsEnum.MessageType.MESSAGE,
-                        UtilsEnum.CdrStatus.RETRY,
-                        "",
-                        false);
-
-                executorService.submit(() ->
-                        this.putMessageOnHashTable(message.getDestinationAddr().concat(ABSENT_SUBSCRIBER_HASH_NAME),
-                                message.getMessageId(), message.toString())
-                );
-                executorService.submit(() ->
-                        this.putMessageOnSpecificList(redisMessageRetryQueue, message)
-                );
+                this.prepareAndSendDlr(message, (int) mapErrorCode, null);
+                return;
             }
 
+            processCdr(message,
+                    UtilsEnum.CdrStatus.RETRY,
+                    "",
+                    false);
+
+            if (Objects.isNull(message.getRetryNumber()) || message.getRetryNumber() >= 0) {
+                message.setRetry(true);
+                message.setRetryNumber(Objects.isNull(message.getRetryNumber()) ? 1 : message.getRetryNumber() + 1);
+                log.warn("Adding retry number {} for message: {}", message.getRetryNumber(), message);
+                this.putMessageOnSpecificList(redisMessageRetryQueue, message);
+            }
         } catch (Exception ex) {
             log.error("Error on sendToRetry {}", ex.getMessage(), ex);
         }
     }
 
+    private boolean isTempError(MAPErrorMessage mapErrorMessage) {
+        return switch (mapErrorMessage.getErrorCode().intValue()) {
+            case MAPErrorCode.smDeliveryFailure -> {
+                var mapErrorMessageSmDeliveryFailure = mapErrorMessage.getEmSMDeliveryFailure();
+                yield SMEnumeratedDeliveryFailureCause.memoryCapacityExceeded.equals(mapErrorMessageSmDeliveryFailure.getSMEnumeratedDeliveryFailureCause())
+                        || SMEnumeratedDeliveryFailureCause.equipmentProtocolError.equals(mapErrorMessageSmDeliveryFailure.getSMEnumeratedDeliveryFailureCause());
+            }
 
-    private MessageEvent removeMessageFromConcurrentHashMaps(long mapDialogId) {
-        MessageEvent message = messageSriConcurrentHashMap.remove(mapDialogId);
-        if (Objects.isNull(message)) {
-            message = messageMtConcurrentHashMap.remove(mapDialogId);
-        }
-        return message;
+            case MAPErrorCode.absentSubscriber, MAPErrorCode.absentSubscriberSM, MAPErrorCode.subscriberBusyForMTSMS,
+                 MAPErrorCode.busySubscriber, MAPErrorCode.systemFailure -> true;
+            default -> false;
+        };
     }
 
-    private boolean isPermanentError(MAPErrorMessage mapErrorMessage) {
-        return !mapErrorMessage.isEmAbsentSubscriberSM() && !mapErrorMessage.isEmSMDeliveryFailure();
+    private boolean isReportSMDeliveryStatusRequired(MAPErrorMessage mapErrorMessage) {
+        return switch (mapErrorMessage.getErrorCode().intValue()) {
+            case MAPErrorCode.smDeliveryFailure -> {
+                var mapErrorMessageSmDeliveryFailure = mapErrorMessage.getEmSMDeliveryFailure();
+                yield SMEnumeratedDeliveryFailureCause.memoryCapacityExceeded.equals(mapErrorMessageSmDeliveryFailure.getSMEnumeratedDeliveryFailureCause());
+            }
+
+            case MAPErrorCode.absentSubscriber, MAPErrorCode.absentSubscriberSM -> true;
+            default -> false;
+        };
     }
 
-    private boolean isAbsentSubscriberError(MAPErrorMessage mapErrorMessage) {
-        return mapErrorMessage.isEmAbsentSubscriberSM();
+    private void setMessageAsNetworkNotifyError(MessageEvent message) {
+        message.setNetworkNotifyError(true);
+        this.putMessageOnHashTable(message.getMsisdn().concat(ABSENT_SUBSCRIBER_HASH_NAME),
+                message.getMessageId(), message.toString());
     }
 
     private void putMessageOnNetworkIdList(int networkId, MessageEvent message) {
@@ -556,11 +640,10 @@ public class MessageProcessing {
                 });
     }
 
-    private void processCdr(MessageEvent message, UtilsEnum.MessageType messageType,
-                            UtilsEnum.CdrStatus cdrStatus, String comment, boolean writeCdr) {
+    private void processCdr(MessageEvent message, UtilsEnum.CdrStatus cdrStatus, String comment, boolean writeCdr) {
         cdrProcessor.putCdrDetailOnRedis(message.toCdrDetail(
                 UtilsEnum.Module.SS7_CLIENT,
-                messageType,
+                (message.isDlr()) ? UtilsEnum.MessageType.DELIVER : UtilsEnum.MessageType.MESSAGE,
                 cdrStatus,
                 comment
         ));

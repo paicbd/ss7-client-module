@@ -34,7 +34,22 @@ public class AppProperties {
     private int redisMinIdle;
 
     @Value("${redis.threadPool.blockWhenExhausted}")
-    private boolean redisBlockWhenExhausted = true;
+    private boolean redisBlockWhenExhausted;
+
+    @Value("${redis.connection.timeout:0}")
+    private int redisConnectionTimeout;
+
+    @Value("${redis.so.timeout:0}")
+    private int redisSoTimeout;
+
+    @Value("${redis.maxAttempts:0}")
+    private int redisMaxAttempts;
+
+    @Value("${redis.connection.password:}")
+    private String redisPassword;
+
+    @Value("${redis.connection.user:}")
+    private String redisUser;
 
     @Value("${websocket.server.host}")
     private String wsHost;

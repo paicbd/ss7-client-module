@@ -18,7 +18,6 @@ import org.restcomm.protocols.ss7.map.api.MAPApplicationContextName;
 import org.restcomm.protocols.ss7.map.api.MAPApplicationContextVersion;
 import org.restcomm.protocols.ss7.map.api.MAPException;
 import org.restcomm.protocols.ss7.map.api.MAPSmsTpduParameterFactory;
-import org.restcomm.protocols.ss7.map.api.errors.AbsentSubscriberDiagnosticSM;
 import org.restcomm.protocols.ss7.map.api.primitives.AddressNature;
 import org.restcomm.protocols.ss7.map.api.primitives.AddressString;
 import org.restcomm.protocols.ss7.map.api.primitives.IMSI;
@@ -67,6 +66,9 @@ import static com.paicbd.module.utils.Constants.PROTOCOL;
 @Slf4j
 public class MessageFactory {
 
+    private static final int GSM7 = 0;
+    private static final int UCS2 = 8;
+
     private final MapLayer mapLayer;
     private final MAPSmsTpduParameterFactory mapSmsTpduParameterFactory;
 
@@ -77,32 +79,11 @@ public class MessageFactory {
 
     public MAPDialogSms createSendRoutingInfoForSMRequestFromMessageEvent(MessageEvent message) throws MAPException {
         boolean smRpPri = true;
-        //Creating Calling Party Address
-        SccpAddress clientSccpAddress = this.getSmscSccpAddress(message);
-
-        GlobalTitle globalTitleServerSccpAddress = Ss7Utils.getGlobalTitle(
-                message.getGlobalTitleIndicator(),
-                message.getTranslationType(),
-                null,
-                CustomNumberingPlanIndicator.fromSmsc(message.getDestAddrNpi().byteValue()).getIndicatorValue(),
-                CustomTypeOfNumber.fromSmsc(message.getDestAddrTon().byteValue()).getIndicatorValue(),
-                message.getDestinationAddr()
-        );
-        SccpAddress serverSccpAddress = Ss7Utils.convertToSccpAddress(globalTitleServerSccpAddress, 0, message.getHlrSsn());
-
-        MAPDialogSms mapDialogSms = this.mapLayer.getMapProvider().getMAPServiceSms().createNewDialog(MAPApplicationContext
-                        .getInstance(MAPApplicationContextName.shortMsgGatewayContext, MAPApplicationContextVersion.getInstance(message.getMapVersion())),
-                clientSccpAddress, null, serverSccpAddress, null);
-
-        ISDNAddressString msisdn = Ss7Utils.getMsisdn(message);
-
-        //Gateway
+        MAPDialogSms mapDialogSms = this.createDialogForRequestToHLR(message);
         AddressString serviceCentreAddress = new AddressStringImpl(AddressNature.international_number, NumberingPlan.ISDN, message.getGlobalTitle());
-
+        ISDNAddressString msisdn = Ss7Utils.getMsisdn(message);
         mapDialogSms.addSendRoutingInfoForSMRequest(msisdn, smRpPri, serviceCentreAddress, null, false, null, null,
                 null, false, null, false, false, null, null);
-
-
         this.setSccpFieldsToMessage(message, mapDialogSms);
         this.logMapMessage("SendRoutingInfoForSMRequest", mapDialogSms);
         return mapDialogSms;
@@ -142,7 +123,7 @@ public class MessageFactory {
                 message.getSourceAddr());
 
         AbsoluteTimeStamp serviceCentreTimeStamp = Ss7Utils.getAbsoluteTimeStampImpl();
-        int dcsVal = message.getDataCoding() == 8 ? 8 : 0; // 0 = GSM7, 8 = UCS2
+        int dcsVal = message.getDataCoding() == UCS2 ? UCS2 : GSM7; // 0 = GSM7, 8 = UCS2
         DataCodingScheme dcs = new DataCodingSchemeImpl(dcsVal);
         UserDataHeader udh = null;
         Charset charsetEncoding = Charset.defaultCharset();
@@ -195,40 +176,14 @@ public class MessageFactory {
         return mapDialogSms;
     }
 
-    public MAPDialogSms createReportSMDeliveryStatusRequestFromMessageEvent(MessageEvent message, boolean isAbsentSubscriber) throws MAPException {
-
-        SccpAddress clientSccpAddress = this.getSmscSccpAddress(message);
-
-        GlobalTitle globalTitleServerSccpAddress = Ss7Utils.getGlobalTitle(
-                message.getGlobalTitleIndicator(),
-                message.getTranslationType(),
-                null,
-                CustomNumberingPlanIndicator.fromSmsc(message.getDestAddrNpi().byteValue()).getIndicatorValue(),
-                CustomTypeOfNumber.fromSmsc(message.getDestAddrTon().byteValue()).getIndicatorValue(),
-                message.getDestinationAddr()
-        );
-        SccpAddress serverSccpAddress = Ss7Utils.convertToSccpAddress(globalTitleServerSccpAddress, 0, message.getMscSsn());
-
-        MAPDialogSms mapDialogSms = this.mapLayer.getMapProvider().getMAPServiceSms().createNewDialog(MAPApplicationContext
-                        .getInstance(MAPApplicationContextName.shortMsgGatewayContext, MAPApplicationContextVersion.getInstance(message.getMapVersion())),
-                clientSccpAddress, null, serverSccpAddress, null);
-
-        ISDNAddressString msisdn = Ss7Utils.getMsisdn(message);
-
+    public MAPDialogSms createReportSMDeliveryStatusRequestFromMessageEvent(MessageEvent message, SMDeliveryOutcome smDeliveryOutcome) throws MAPException {
+        MAPDialogSms mapDialogSms = this.createDialogForRequestToHLR(message);
         AddressString serviceCentreAddress = new AddressStringImpl(AddressNature.international_number, NumberingPlan.ISDN, message.getGlobalTitle());
-        SMDeliveryOutcome sMDeliveryOutcome = isAbsentSubscriber ? SMDeliveryOutcome.absentSubscriber : SMDeliveryOutcome.memoryCapacityExceeded;
-        Integer absentSubscriberDiagnosticSM = AbsentSubscriberDiagnosticSM.NoPagingResponseViaTheMSC.getCode();
-        boolean gprsSupportIndicator = false;
-        boolean deliveryOutcomeIndicator = false;
-        SMDeliveryOutcome additionalSMDeliveryOutcome = isAbsentSubscriber ? SMDeliveryOutcome.absentSubscriber : SMDeliveryOutcome.memoryCapacityExceeded;
-        Integer additionalAbsentSubscriberDiagnosticSM = AbsentSubscriberDiagnosticSM.NoPagingResponseViaTheSGSN.getCode();
-
-        mapDialogSms.addReportSMDeliveryStatusRequest(msisdn, serviceCentreAddress, sMDeliveryOutcome, absentSubscriberDiagnosticSM,
-                null, gprsSupportIndicator, deliveryOutcomeIndicator, additionalSMDeliveryOutcome, additionalAbsentSubscriberDiagnosticSM);
-
+        ISDNAddressString msisdn = Ss7Utils.getMsisdn(message);
+        mapDialogSms.addReportSMDeliveryStatusRequest(msisdn, serviceCentreAddress, smDeliveryOutcome, null,
+                null, false, false, null, null);
         this.logMapMessage("ReportSMDeliveryStatusRequest", mapDialogSms);
         return mapDialogSms;
-
     }
 
     public MessageEvent createMessageEventFromMoForwardShortMessageRequest(
@@ -361,6 +316,17 @@ public class MessageFactory {
                 messageType, mapDialogSms.getLocalAddress(), mapDialogSms.getRemoteAddress(), mapDialogSms.getLocalDialogId(), mapDialogSms.getRemoteDialogId());
     }
 
+    private MAPDialogSms createDialogForRequestToHLR(MessageEvent message) throws MAPException {
+        //Creating Calling Party Address
+        SccpAddress clientSccpAddress = this.getSmscSccpAddress(message);
+        //Creating Called Party Address
+        SccpAddress serverSccpAddress = this.getHlrSccpAddress(message);
+
+        return this.mapLayer.getMapProvider().getMAPServiceSms().createNewDialog(MAPApplicationContext
+                        .getInstance(MAPApplicationContextName.shortMsgGatewayContext, MAPApplicationContextVersion.getInstance(message.getMapVersion())),
+                clientSccpAddress, null, serverSccpAddress, null);
+    }
+
     private SccpAddress getSmscSccpAddress(MessageEvent message) {
         GlobalTitle globalTitleClientSccpAddress = Ss7Utils.getGlobalTitle(
                 message.getGlobalTitleIndicator(),
@@ -371,6 +337,18 @@ public class MessageFactory {
                 message.getGlobalTitle()
         );
         return Ss7Utils.convertToSccpAddress(globalTitleClientSccpAddress, 0, message.getSmscSsn());
+    }
+
+    private SccpAddress getHlrSccpAddress(MessageEvent message) {
+        GlobalTitle globalTitleServerSccpAddress = Ss7Utils.getGlobalTitle(
+                message.getGlobalTitleIndicator(),
+                message.getTranslationType(),
+                null,
+                CustomNumberingPlanIndicator.fromSmsc(message.getDestAddrNpi().byteValue()).getIndicatorValue(),
+                CustomTypeOfNumber.fromSmsc(message.getDestAddrTon().byteValue()).getIndicatorValue(),
+                message.getDestinationAddr()
+        );
+        return Ss7Utils.convertToSccpAddress(globalTitleServerSccpAddress, 0, message.getHlrSsn());
     }
 
     public void setSccpFieldsToMessage(MessageEvent messageEvent, MAPDialogSms mapDialogSms) {

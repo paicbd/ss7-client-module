@@ -12,9 +12,12 @@ import com.paicbd.module.dto.statics.RemoteResourceConfig;
 import com.paicbd.module.dto.statics.RuleConfig;
 import com.paicbd.module.dto.statics.ServiceAccessConfig;
 import com.paicbd.module.dto.statics.ServiceAccessPointsConfig;
+import lombok.extern.slf4j.Slf4j;
 
+import java.net.ServerSocket;
 import java.util.List;
 
+@Slf4j
 public class GatewayCreator {
     /*
     ------------------------------------------------------------------------------------------------------
@@ -23,7 +26,7 @@ public class GatewayCreator {
     ------------------------------------------------------------------------------------------------------
      */
     public static Gateway buildSS7Gateway(String name, int mnoId, int networkId) {
-        return buildSS7Gateway(name, mnoId, networkId, 2908, 2909);
+        return buildSS7Gateway(name, mnoId, networkId, GatewayCreator.getRandomLocalPort(), GatewayCreator.getRandomLocalPort());
     }
 
     public static Gateway buildSS7Gateway(String name, int mnoId, int networkId, int hostPort, int peerPort) {
@@ -299,5 +302,14 @@ public class GatewayCreator {
                                 )
                                 .build()
                 ).build();
+    }
+
+    public static int getRandomLocalPort() {
+        try (ServerSocket serverSocket = new ServerSocket(0)) {
+            return serverSocket.getLocalPort();
+        } catch (Exception e) {
+            log.error("Error while creating server socket", e);
+            return 0;
+        }
     }
 }

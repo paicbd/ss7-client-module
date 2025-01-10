@@ -30,6 +30,7 @@ import org.restcomm.protocols.ss7.map.api.MAPException;
 import org.restcomm.protocols.ss7.map.api.primitives.ISDNAddressString;
 import org.restcomm.protocols.ss7.map.api.service.sms.MAPDialogSms;
 import org.restcomm.protocols.ss7.map.api.service.sms.MoForwardShortMessageRequest;
+import org.restcomm.protocols.ss7.map.api.service.sms.SMDeliveryOutcome;
 import org.restcomm.protocols.ss7.map.api.service.sms.SmsSignalInfo;
 import org.restcomm.protocols.ss7.map.api.smstpdu.SmsSubmitTpdu;
 import org.restcomm.protocols.ss7.map.api.smstpdu.SmsTpdu;
@@ -556,11 +557,11 @@ class MessageFactoryTest {
                 .build();
 
         mapDialogSms = this.messageFactory.createReportSMDeliveryStatusRequestFromMessageEvent(
-                currentMessageEvent, true);
+                currentMessageEvent, SMDeliveryOutcome.absentSubscriber);
         this.checkCorrectReportSMDeliveryStatusRequestValues(currentMessageEvent, mapDialogSms);
 
         mapDialogSms = this.messageFactory.createReportSMDeliveryStatusRequestFromMessageEvent(
-                currentMessageEvent, false);
+                currentMessageEvent, SMDeliveryOutcome.memoryCapacityExceeded);
         this.checkCorrectReportSMDeliveryStatusRequestValues(currentMessageEvent, mapDialogSms);
 
         stopLayers();
@@ -574,7 +575,7 @@ class MessageFactoryTest {
         assertNotNull(remoteAddress);
         assertEquals(messageEvent.getDestinationAddr(), remoteAddress.getGlobalTitle().getDigits());
         assertEquals(0, remoteAddress.getSignalingPointCode());
-        assertEquals(messageEvent.getMscSsn(), remoteAddress.getSubsystemNumber());
+        assertEquals(messageEvent.getHlrSsn(), remoteAddress.getSubsystemNumber());
 
         assertNotNull(localAddress);
         assertEquals(messageEvent.getGlobalTitle(), localAddress.getGlobalTitle().getDigits());
