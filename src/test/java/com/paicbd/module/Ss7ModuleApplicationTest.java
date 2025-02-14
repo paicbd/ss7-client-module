@@ -200,7 +200,7 @@ class Ss7ModuleApplicationTest {
             ArgumentCaptor<String> valueCaptor = ArgumentCaptor.forClass(String.class);
             signalingReactionForAlertServiceCentre().toList().forEach(arguments -> {
                 var signalingArguments = arguments.get();
-                SendRoutingInfoForSmReaction sendRoutingInfoForSmReaction = (SendRoutingInfoForSmReaction) signalingArguments [0];
+                SendRoutingInfoForSmReaction sendRoutingInfoForSmReaction = (SendRoutingInfoForSmReaction) signalingArguments[0];
                 InformServiceCentreReaction informServiceCentreReaction = (InformServiceCentreReaction) signalingArguments[1];
                 MtForwardSmReaction mtForwardSmReaction = (MtForwardSmReaction) signalingArguments[2];
                 mapServer.setSendRoutingInfoForSmReaction(sendRoutingInfoForSmReaction);
@@ -324,7 +324,7 @@ class Ss7ModuleApplicationTest {
             ArgumentCaptor<String> valueCaptor = ArgumentCaptor.forClass(String.class);
             for (Arguments arguments : signalingReactionForPermanentError().toList()) {
                 var signalingArguments = arguments.get();
-                SendRoutingInfoForSmReaction sendRoutingInfoForSmReaction = (SendRoutingInfoForSmReaction) signalingArguments [0];
+                SendRoutingInfoForSmReaction sendRoutingInfoForSmReaction = (SendRoutingInfoForSmReaction) signalingArguments[0];
                 MtForwardSmReaction mtForwardSmReaction = (MtForwardSmReaction) signalingArguments[1];
                 mapServer.setSendRoutingInfoForSmReaction(sendRoutingInfoForSmReaction);
                 mapServer.setMtForwardSMReaction(mtForwardSmReaction);
@@ -421,6 +421,125 @@ class Ss7ModuleApplicationTest {
         } catch (Exception e) {
             log.error("Error on run test for simulate MO scenarios", e);
         }
+    }
+
+
+    @Test
+    @DisplayName("Start associations and send multipart message (SRI and MT)")
+    void startAssociationsAndSendMultipartMessage() throws Exception {
+        when(appProperties.getConfigPath()).thenReturn("");
+        extendedResource = new ExtendedResource(appProperties);
+        String path = extendedResource.createDirectory("ServerTestForSriAndMt");
+        int host = getRandomLocalPort();
+        int peer = getRandomLocalPort();
+        MapServer mapServer = new MapServer(path, host, peer);
+        mapServer.initializeStack(IpChannelType.SCTP);
+        Gateway gw = GatewayCreator.buildSS7Gateway("ss7Test", 1, 4, peer, host);
+        String listName = gw.getNetworkId() + "_ss7_message";
+        when(appProperties.getGatewaysWorkExecuteEvery()).thenReturn(1000);
+        LayerManager layerManager = new LayerManager(gw, path, this.jedisCluster,
+                this.cdrProcessor, this.appProperties, this.errorCodeMappingConcurrentHashMap);
+        when(appProperties.getWorkersPerGateway()).thenReturn(1);
+        when(appProperties.getTpsPerGw()).thenReturn(1);
+        layerManager.connect();
+        AtomicBoolean isUp = (AtomicBoolean) getClassInstances(layerManager, "isUp");
+        assertNotNull(isUp);
+        isUp.set(false);
+        multipartMessageEventProvider().toList().forEach(arguments -> {
+            MessageEvent messageEvent = (MessageEvent) arguments.get()[0];
+            boolean responseMtForwardSmWithTcapContinue = (boolean) arguments.get()[1];
+            MtForwardSmReaction mtForwardSmReaction = (MtForwardSmReaction) arguments.get()[2];
+            UtilsEnum.CdrStatus cdrStatus = (UtilsEnum.CdrStatus) arguments.get()[3];
+            Map<String, MessageEvent> messageEventMap = new HashMap<>();
+            mapServer.setResponseMtForwardSmWithTcapContinue(responseMtForwardSmWithTcapContinue);
+            mapServer.setMtForwardSMReaction(mtForwardSmReaction);
+            when(jedisCluster.llen(listName)).thenReturn(1L).thenAnswer(invocation -> 0L);
+            when(jedisCluster.lpop(listName, 1)).thenReturn(List.of(messageEvent.toString()));
+            if (Objects.nonNull(messageEvent.getMessageParts())) {
+                for (MessagePart msgPart : messageEvent.getMessageParts()) {
+                    var messageEventPart = new MessageEvent().clone(messageEvent);
+                    messageEventPart.setMessageId(msgPart.getMessageId());
+                    messageEventPart.setShortMessage(msgPart.getShortMessage());
+                    messageEventPart.setMsgReferenceNumber(msgPart.getMsgReferenceNumber());
+                    messageEventPart.setTotalSegment(msgPart.getTotalSegment());
+                    messageEventPart.setSegmentSequence(msgPart.getSegmentSequence());
+                    messageEventPart.setUdhJson(msgPart.getUdhJson());
+                    messageEventPart.setOptionalParameters(msgPart.getOptionalParameters());
+                    messageEventPart.setNetworkNodeNumber("598991900032");
+                    messageEventPart.setNetworkNodeNumberNatureOfAddress(1);
+                    messageEventPart.setNetworkNodeNumberNumberingPlan(1);
+                    messageEventPart.setImsi("748031234567890");
+                    if (messageEventPart.getSegmentSequence() != 1) {
+                        String key = messageEventPart.getParentId() +
+                                "_" +
+                                messageEventPart.getMsgReferenceNumber() +
+                                "_" +
+                                messageEventPart.getSegmentSequence() +
+                                "_" +
+                                messageEventPart.getTotalSegment();
+
+                        when(jedisCluster.get(key)).thenReturn(messageEventPart.toString());
+                    }
+                    messageEventMap.put(messageEventPart.getMessageId(), messageEventPart);
+                }
+            }
+            isUp.set(true);
+            sleepFlow(2000);
+            isUp.set(false);
+            if (MtForwardSmReaction.ERROR_ABSENT_SUBSCRIBER.equals(mtForwardSmReaction)) {
+                ArgumentCaptor<String> hashNameCaptor = ArgumentCaptor.forClass(String.class);
+                ArgumentCaptor<String> fieldCaptor = ArgumentCaptor.forClass(String.class);
+                ArgumentCaptor<String> valueCaptor = ArgumentCaptor.forClass(String.class);
+                verify(jedisCluster, atLeastOnce()).hset(hashNameCaptor.capture(), fieldCaptor.capture(), valueCaptor.capture());
+                String key = messageEvent.getMsisdn().concat(ABSENT_SUBSCRIBER_HASH_NAME);
+                assertEquals(key, hashNameCaptor.getValue());
+                MessageEvent messageToRetry = Converter.stringToObject(valueCaptor.getValue(), MessageEvent.class);
+                assertNotNull(messageToRetry);
+                Map<String, String> responseOfMessageInAbsentSubscriber = new HashMap<>();
+                responseOfMessageInAbsentSubscriber.put(messageToRetry.getMessageId(), messageToRetry.toString());
+                when(jedisCluster.hgetAll(key)).thenReturn(responseOfMessageInAbsentSubscriber);
+                mapServer.setMtForwardSMReaction(MtForwardSmReaction.RETURN_SUCCESS);
+                mapServer.sendAlertServiceCentre(messageToRetry.getMsisdn());
+                sleepFlow(2000);
+                ArgumentCaptor<String> keyToDeleteCaptor = ArgumentCaptor.forClass(String.class);
+                ArgumentCaptor<String> valueDeletedCaptor = ArgumentCaptor.forClass(String.class);
+                verify(jedisCluster, atLeastOnce()).hdel(keyToDeleteCaptor.capture(), valueDeletedCaptor.capture());
+                assertEquals(key, keyToDeleteCaptor.getValue());
+            } else {
+                ArgumentCaptor<String> messageIdArgumentCaptor = ArgumentCaptor.forClass(String.class);
+                verify(cdrProcessor, atLeastOnce()).createCdr(messageIdArgumentCaptor.capture());
+                ArgumentCaptor<UtilsRecords.CdrDetail> cdrDetailArgumentCaptor = ArgumentCaptor.forClass(UtilsRecords.CdrDetail.class);
+                verify(cdrProcessor, atLeastOnce()).putCdrDetailOnRedis(cdrDetailArgumentCaptor.capture());
+                var cdrDetailsList = cdrDetailArgumentCaptor.getAllValues();
+                var cdrList = cdrDetailsList.stream().filter(
+                        cdrDetail -> messageEventMap.containsKey(cdrDetail.messageId()) &&
+                                cdrStatus.name().equals(cdrDetail.cdrStatus()) &&
+                                Objects.nonNull(cdrDetail.imsi())
+                ).toList();
+                var messageIdList = messageIdArgumentCaptor.getAllValues().stream().filter(
+                        messageEventMap::containsKey).toList();
+                assertNotNull(messageIdList);
+                assertEquals(messageEventMap.size(), messageIdList.size());
+                assertNotNull(cdrList);
+                messageEventMap.forEach((messageId, messageEventPart) -> {
+                    var cdr = cdrDetailsList.stream().filter(
+                            cdrDetail -> Objects.equals(cdrDetail.messageId(), messageEventPart.getMessageId()) &&
+                                    cdrStatus.name().equals(cdrDetail.cdrStatus()) &&
+                                    Objects.nonNull(cdrDetail.imsi())
+                    ).findFirst().orElse(null);
+                    assertNotNull(cdr);
+                    assertEquals(messageEventPart.getMessageId(), cdr.messageId());
+                    assertEquals("SS7", cdr.destProtocol());
+                    assertEquals(cdrStatus.name(), cdr.cdrStatus());
+                    assertEquals("SS7_CLIENT", cdr.module());
+                });
+            }
+
+
+        });
+        layerManager.stopLayerManager();
+        mapServer.stopStack();
+        extendedResource.deleteDirectory(new File(path));
     }
 
     private void executeMoMessageVerifications(String redisListName, String messageEventInRaw) {
@@ -631,63 +750,8 @@ class Ss7ModuleApplicationTest {
                         .networkIdToMapSri(-1)
                         .networkIdToPermanentFailure(-1)
                         .networkIdTempFailure(-1)
-                        .build(),
-
-                //Multipart message
-                MessageEvent.builder()
-                        .id("1722446896082-12194920127674")
-                        .messageId("1722446896081-12194920043918")
-                        .parentId("1722446896081-12194920043918")
-                        .systemId("smpp_sp")
-                        .sourceAddr("50588888888")
-                        .destinationAddr("50599999999")
-                        .shortMessage("Hello World I'm the fist part of a multipart message Hello World I'm the second part of a multipart message")
-                        .originNetworkId(3)
-                        .originNetworkType("SP")
-                        .originProtocol("SMPP")
-                        .destNetworkType("GW")
-                        .destProtocol("SS7")
-                        .destNetworkId(5)
-                        .sourceAddrTon(1)
-                        .sourceAddrNpi(1)
-                        .destAddrTon(1)
-                        .destAddrNpi(1)
-                        .routingId(1)
-                        .dataCoding(0)
-                        .translationType(0)
-                        .globalTitle("598991900535")
-                        .globalTitleIndicator("GT0100")
-                        .msisdn("50599999999")
-                        .addressNatureMsisdn(1)
-                        .numberingPlanMsisdn(1)
-                        .mscSsn(8)
-                        .hlrSsn(6)
-                        .smscSsn(8)
-                        .registeredDelivery(RequestDelivery.NON_REQUEST_DLR.getValue())
-                        .validityPeriod(120)
-                        .mapVersion(3)
-                        .networkIdToMapSri(-1)
-                        .networkIdToPermanentFailure(-1)
-                        .networkIdTempFailure(-1)
-                        .messageParts(List.of(
-                                MessagePart.builder()
-                                        .messageId("1722446896081-12194920043918")
-                                        .shortMessage("Hello World I'm the fist part of a multipart message")
-                                        .msgReferenceNumber("2")
-                                        .totalSegment(2)
-                                        .segmentSequence(1)
-                                        .udhJson("{\"message\":\"Hello World I'm the fist part of a multipart message\",\"0x00\":[2,2,1]}")
-                                        .build(),
-                                MessagePart.builder()
-                                        .messageId("1722446896081-12194920043918")
-                                        .shortMessage("Hello World I'm the second part of a multipart message")
-                                        .msgReferenceNumber("2")
-                                        .totalSegment(2)
-                                        .segmentSequence(2)
-                                        .udhJson("{\"message\":\"Hello World I'm the second part of a multipart message\",\"0x00\":[2,2,2]}")
-                                        .build()
-                        ))
-                        .build(),
+                        .build()
+                ,
                 //DLR
                 MessageEvent.builder()
                         .id("1719421854353-11028072268459")
@@ -709,6 +773,7 @@ class Ss7ModuleApplicationTest {
                         .shortMessage("id:1 sub:001 dlvrd:001 submit date:2101010000 done date:2101010000 stat:DELIVRD err:000 text:Test Message")
                         .originNetworkType("SP")
                         .originProtocol("SS7")
+                        .status("DELIVRD")
                         .originNetworkId(2)
                         .destNetworkType("GW")
                         .destProtocol("SS7")
@@ -732,5 +797,95 @@ class Ss7ModuleApplicationTest {
                         .delReceipt("id:1 sub:001 dlvrd:001 submit date:2101010000 done date:2101010000 stat:DELIVRD err:000 text:Test Message")
                         .build()
         );
+    }
+
+    static Stream<Arguments> multipartMessageEventProvider() {
+        return Stream.of(
+                //Multipart message with TCAP Continue response true
+                Arguments.of(
+                        getMultipartMessageEvent(),
+                        true,
+                        MtForwardSmReaction.RETURN_SUCCESS,
+                        UtilsEnum.CdrStatus.SENT
+                ),
+                //Multipart message with TCAP Continue response true
+                Arguments.of(
+                        getMultipartMessageEvent(),
+                        false,
+                        MtForwardSmReaction.RETURN_SUCCESS,
+                        UtilsEnum.CdrStatus.SENT
+                ),
+                //Multipart message with TCAP Continue response true and permanent error
+                Arguments.of(
+                        getMultipartMessageEvent(),
+                        true,
+                        MtForwardSmReaction.ERROR_SYSTEM_FAILURE_UNKNOWN_SERVICE_CENTRE,
+                        UtilsEnum.CdrStatus.FAILED
+                ),
+                //Multipart message with TCAP Continue response true and permanent error
+                Arguments.of(
+                        getMultipartMessageEvent(),
+                        true,
+                        MtForwardSmReaction.ERROR_ABSENT_SUBSCRIBER,
+                        UtilsEnum.CdrStatus.SENT
+                )
+        );
+    }
+
+    private static MessageEvent getMultipartMessageEvent() {
+        return MessageEvent.builder()
+                .id("1722446896082-12194920127674")
+                .messageId("1722446896081-12194920043918")
+                .parentId("1722446896081-12194920043918")
+                .systemId("smpp_sp")
+                .sourceAddr("50588888888")
+                .destinationAddr("50599999999")
+                .shortMessage("Hello World I'm the fist part of a multipart message Hello World I'm the second part of a multipart message")
+                .originNetworkId(3)
+                .originNetworkType("SP")
+                .originProtocol("SMPP")
+                .destNetworkType("GW")
+                .destProtocol("SS7")
+                .destNetworkId(5)
+                .sourceAddrTon(1)
+                .sourceAddrNpi(1)
+                .destAddrTon(1)
+                .destAddrNpi(1)
+                .routingId(1)
+                .dataCoding(0)
+                .translationType(0)
+                .globalTitle("598991900535")
+                .globalTitleIndicator("GT0100")
+                .msisdn("50599999999")
+                .addressNatureMsisdn(1)
+                .numberingPlanMsisdn(1)
+                .mscSsn(8)
+                .hlrSsn(6)
+                .smscSsn(8)
+                .registeredDelivery(RequestDelivery.REQUEST_DLR.getValue())
+                .validityPeriod(120)
+                .mapVersion(3)
+                .networkIdToMapSri(-1)
+                .networkIdToPermanentFailure(-1)
+                .networkIdTempFailure(-1)
+                .messageParts(List.of(
+                        MessagePart.builder()
+                                .messageId(System.currentTimeMillis() + "-" + System.nanoTime())
+                                .shortMessage("Hello World I'm the fist part of a multipart message")
+                                .msgReferenceNumber("2")
+                                .totalSegment(2)
+                                .segmentSequence(1)
+                                .udhJson("{\"message\":\"Hello World I'm the fist part of a multipart message\",\"0x00\":[2,2,1]}")
+                                .build(),
+                        MessagePart.builder()
+                                .messageId(System.currentTimeMillis() + "-" + System.nanoTime())
+                                .shortMessage("Hello World I'm the second part of a multipart message")
+                                .msgReferenceNumber("2")
+                                .totalSegment(2)
+                                .segmentSequence(2)
+                                .udhJson("{\"message\":\"Hello World I'm the second part of a multipart message\",\"0x00\":[2,2,2]}")
+                                .build()
+                ))
+                .build();
     }
 }

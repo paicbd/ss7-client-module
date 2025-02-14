@@ -89,7 +89,7 @@ public class MessageFactory {
         return mapDialogSms;
     }
 
-    public MAPDialogSms createMtForwardSMRequestFromMessageEvent(MessageEvent message) throws MAPException {
+    public MAPDialogSms createMtForwardSMRequestFromMessageEvent(MessageEvent message, MAPDialogSms mapDialogSms) throws MAPException {
 
         IMSI imsi = new IMSIImpl(message.getImsi());
 
@@ -105,12 +105,13 @@ public class MessageFactory {
         );
         SccpAddress serverSccpAddress = Ss7Utils.convertToSccpAddress(globalTitleServerSccpAddress, 0, message.getMscSsn());
 
-
         MAPApplicationContextVersion mapAcnVersion = MAPApplicationContextVersion.getInstance(message.getMapVersion());
         MAPApplicationContextName mapAcn = MAPApplicationContextName.shortMsgMTRelayContext;
         MAPApplicationContext mapAppContext = MAPApplicationContext.getInstance(mapAcn, mapAcnVersion);
-        MAPDialogSms mapDialogSms = this.mapLayer.getMapProvider().getMAPServiceSms().createNewDialog(mapAppContext, clientSccpAddress,
-                null, serverSccpAddress, null);
+        if (Objects.isNull(mapDialogSms)) {
+            mapDialogSms = this.mapLayer.getMapProvider().getMAPServiceSms().createNewDialog(mapAppContext, clientSccpAddress,
+                    null, serverSccpAddress, null);
+        }
 
         SM_RP_DA da = this.mapLayer.getMapProvider().getMAPParameterFactory().createSM_RP_DA(imsi);
 
@@ -129,13 +130,11 @@ public class MessageFactory {
         Charset charsetEncoding = Charset.defaultCharset();
 
         if (Converter.hasValidValue(message.getUdhJson())) {
-            Map<String, Object> udhMap = Converter.jsonToUdhMap(message.getUdhJson());
             udh = new UserDataHeaderImpl();
             UserDataHeaderElement concatenatedShortMessagesIdentifier = this.mapSmsTpduParameterFactory
                     .createConcatenatedShortMessagesIdentifier(Integer.parseInt(message.getMsgReferenceNumber()) > 255, Integer.parseInt(message.getMsgReferenceNumber()),
                             message.getTotalSegment(), message.getSegmentSequence());
             udh.addInformationElement(concatenatedShortMessagesIdentifier);
-            message.setShortMessage(udhMap.get("message").toString());
         }
 
         // evaluate Charset
@@ -144,6 +143,9 @@ public class MessageFactory {
         }
 
         boolean moreMessagesToSend = false;
+        if (Objects.nonNull(message.getTotalSegment())) {
+            moreMessagesToSend = !Objects.equals(message.getTotalSegment(), message.getSegmentSequence());
+        }
         boolean forwardedOrSpawned = false;
         boolean replyPathExists = false;
         boolean statusReportIndication = Objects.equals(message.getRegisteredDelivery(), RequestDelivery.REQUEST_DLR.getValue());
@@ -266,7 +268,7 @@ public class MessageFactory {
     public MessageEvent createDeliveryReceiptMessage(MessageEvent messageEvent, ErrorCodeMapping errorCodeMapping, String extraInformation) {
         MessageEvent deliveryReceiptMessageEvent = new MessageEvent();
         DeliveryReceiptState deliveryReceiptState;
-        DeliveryReceipt deliveryReceipt = new DeliveryReceipt(messageEvent.getMessageId(), 1, 1,
+        DeliveryReceipt deliveryReceipt = new DeliveryReceipt(messageEvent.getParentId(), 1, 1,
                 new Date(), new Date(), DeliveryReceiptState.DELIVRD, "000", "");
         deliveryReceiptMessageEvent.clone(messageEvent);
         if (errorCodeMapping != null) {
@@ -276,7 +278,7 @@ public class MessageFactory {
             String error = errorCodeMapping.getDeliveryErrorCode() + "";
             deliveryReceipt.setFinalStatus(deliveryReceiptState);
             deliveryReceipt.setError(error);
-            log.warn("Creating deliver_sm with status {} and error {} for submit_sm with id {}", deliveryReceiptState, error, messageEvent.getMessageId());
+            log.warn("Creating deliver_sm with status {} and error {} for submit_sm with id {}", deliveryReceiptState, error, messageEvent.getParentId());
         }
 
         String dlrMessage = Objects.isNull(extraInformation) ? deliveryReceipt.toString() : deliveryReceipt.toString().concat(extraInformation);
@@ -304,6 +306,7 @@ public class MessageFactory {
         deliveryReceiptMessageEvent.setMsisdn(deliveryReceiptMessageEvent.getDestinationAddr());
         deliveryReceiptMessageEvent.setAddressNatureMsisdn(deliveryReceiptMessageEvent.getDestAddrTon());
         deliveryReceiptMessageEvent.setNumberingPlanMsisdn(deliveryReceiptMessageEvent.getDestAddrNpi());
+        deliveryReceiptMessageEvent.setStatus(deliveryReceipt.getFinalStatus().name());
         return deliveryReceiptMessageEvent;
     }
 

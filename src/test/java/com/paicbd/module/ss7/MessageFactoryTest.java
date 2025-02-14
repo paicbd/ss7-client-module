@@ -163,7 +163,7 @@ class MessageFactoryTest {
     @DisplayName("Create MTForwardSM Request From Message Event When Has Message Event Then It Creates Map Dialog Sms")
     void createMtForwardSMRequestFromMessageEventWhenHasMessageEventThenItCreatesMapDialogSms(MessageEvent messageEvent) throws MAPException {
         startLayers();
-        MAPDialogSms mtMessage = this.messageFactory.createMtForwardSMRequestFromMessageEvent(messageEvent);
+        MAPDialogSms mtMessage = this.messageFactory.createMtForwardSMRequestFromMessageEvent(messageEvent, null);
         checkCorrectMtForwardSMRequestValues(messageEvent, mtMessage);
         stopLayers();
     }

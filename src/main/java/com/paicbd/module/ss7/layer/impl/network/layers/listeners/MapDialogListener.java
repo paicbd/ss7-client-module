@@ -27,7 +27,7 @@ public class MapDialogListener implements MAPDialogListener {
 
     @Override
     public void onDialogDelimiter(MAPDialog mapDialog) {
-        ChannelMessage channelMessage = Ss7Utils.createChannelMessage("onDialogDelimiter");
+        ChannelMessage channelMessage = Ss7Utils.createChannelMessage(Constants.ON_DIALOG_DELIMITER);
         channelMessage.setParameter(Constants.DIALOG, mapDialog);
         this.channelHandler.receiveMessageFromListener(channelMessage);
     }
