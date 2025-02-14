@@ -13,6 +13,7 @@ import com.paicbd.module.utils.Ss7Utils;
 import com.paicbd.smsc.cdr.CdrProcessor;
 import com.paicbd.smsc.dto.ErrorCodeMapping;
 import com.paicbd.smsc.dto.MessageEvent;
+import com.paicbd.smsc.dto.MessagePart;
 import com.paicbd.smsc.utils.Converter;
 import com.paicbd.smsc.utils.RequestDelivery;
 import com.paicbd.smsc.utils.UtilsEnum;
@@ -43,6 +44,7 @@ import org.restcomm.protocols.ss7.map.api.smstpdu.SmsSubmitTpdu;
 import org.restcomm.protocols.ss7.map.api.smstpdu.SmsTpdu;
 import org.restcomm.protocols.ss7.map.api.smstpdu.SmsTpduType;
 import org.restcomm.protocols.ss7.sccp.NetworkIdState;
+import org.restcomm.protocols.ss7.tcap.api.MessageType;
 import org.restcomm.protocols.ss7.tcap.asn.ReturnResultLastImpl;
 import org.restcomm.protocols.ss7.tcap.asn.comp.ReturnResultLast;
 import redis.clients.jedis.JedisCluster;
@@ -94,7 +96,6 @@ public class MessageProcessing {
         Thread.ofVirtual().name("MO_Watcher").start(() -> new Watcher("MO message send", moRequestPerSecond, 1).startWatching());
     }
 
-
     /**
      * Send the message, send SRI if IMSI is NULL and if not send MT
      *
@@ -109,7 +110,7 @@ public class MessageProcessing {
         if (Objects.isNull(message.getImsi())) {
             sendRoutingInfoForSMRequest(message);
         } else {
-            sendMtForwardSMRequest(message);
+            sendMtForwardSMRequest(message, null);
         }
     }
 
@@ -171,10 +172,11 @@ public class MessageProcessing {
         this.processErrorComponent(mapDialog, mapErrorMessage);
     }
 
-    public void processDialog(ChannelMessage channelMessage) {
+    public void processOnDialogClose(ChannelMessage channelMessage) {
         MAPDialog mapDialog = (MAPDialog) channelMessage.getParameter(Constants.DIALOG);
         MessageTransferData messageTransferData = (MessageTransferData) mapDialog.getUserObject();
         if (Objects.isNull(messageTransferData)) {
+            log.warn("No message transfer data on processOnDialogClose using DialogId -> {}", mapDialog.getLocalDialogId());
             return;
         }
         MessageEvent messageEvent = messageTransferData.getMessageEvent();
@@ -183,11 +185,35 @@ public class MessageProcessing {
             return;
         }
 
-        if (MessageTransferType.SEND_ROUTING_INFO_FOR_SM.equals(messageTransferData.getMessageTransferType())) {
+        if (Objects.requireNonNull(messageTransferData.getMessageTransferType()) == MessageTransferType.SEND_ROUTING_INFO_FOR_SM) {
             String id = messageTransferData.getMessageEvent().getId();
             if (Objects.nonNull(messageEventConcurrentMap.remove(id))) {
                 this.processDialogTypeSendRoutingInfo(messageTransferData);
             }
+        }
+    }
+
+    private void processMultiPartMessages(MAPDialog mapDialog, MessageTransferData messageTransferData, MessageEvent messageEvent) {
+        if (Objects.nonNull(messageTransferData.getMessageEvent().getMsgReferenceNumber())) {
+            boolean isContinue = MessageType.Continue.equals(mapDialog.getTCAPMessageType());
+            int currentSegment = messageTransferData.getMessageEvent().getSegmentSequence();
+            int totalSegments = messageTransferData.getMessageEvent().getTotalSegment();
+            if (currentSegment < totalSegments) {
+                int nextSegment = messageTransferData.getMessageEvent().getSegmentSequence() + 1;
+                String key = messageEvent.getParentId() + "_" + messageEvent.getMsgReferenceNumber() + "_" + nextSegment + "_" + messageEvent.getTotalSegment();
+                String messagePartInRaw = jedisCluster.get(key);
+                MessageEvent messagePart = Converter.stringToObject(messagePartInRaw, MessageEvent.class);
+                this.sendMtForwardSMRequest(messagePart, isContinue ? (MAPDialogSms) mapDialog : null);
+            }
+
+            if (isContinue && (currentSegment == totalSegments)) {
+                try {
+                    mapDialog.close(false);
+                } catch (MAPException e) {
+                    log.error("MAPException when closing MAP dialog from handleSmsResponse(): {}", e.toString(), e);
+                }
+            }
+
         }
     }
 
@@ -228,9 +254,9 @@ public class MessageProcessing {
         mapRoutingData.setAdditionalAbsentSubscriberDiagnosticSM(informServiceCentreRequest.getAdditionalAbsentSubscriberDiagnosticSM());
     }
 
-    private void sendMtForwardSMRequest(MessageEvent message) {
+    private void sendMtForwardSMRequest(MessageEvent message, MAPDialogSms mapDialog) {
         try {
-            var mapDialogSms = messageFactory.createMtForwardSMRequestFromMessageEvent(message);
+            var mapDialogSms = messageFactory.createMtForwardSMRequestFromMessageEvent(message, mapDialog);
             MessageTransferData messageTransferData = new MessageTransferData(MessageTransferType.SEND_MT_FORWARD_SM, message, null);
             mapDialogSms.setUserObject(messageTransferData);
             mapDialogSms.send();
@@ -239,6 +265,7 @@ public class MessageProcessing {
         } catch (Exception ex) {
             log.error("Error on sendMtForwardSMRequest {}", ex.getMessage(), ex);
             this.processCdr(message, UtilsEnum.CdrStatus.FAILED, "ERROR ON SEND MT DUE TO " + ex.getMessage(), true);
+            this.prepareAndSendDlr(message, 34, null);
         }
     }
 
@@ -252,6 +279,7 @@ public class MessageProcessing {
         this.messageFactory.setSccpFieldsToMessage(sent, mtForwardShortMessageResponse.getMAPDialog());
         this.processCdr(sent, UtilsEnum.CdrStatus.SENT, "", true);
         this.prepareAndSendDlr(sent, null, null);
+        this.processMultiPartMessages(mtForwardShortMessageResponse.getMAPDialog(), messageTransferData, sent);
     }
 
     private void processMoMessages(MoForwardShortMessageRequest moForwardShortMessageRequestIndication) {
@@ -284,7 +312,6 @@ public class MessageProcessing {
             log.error("Error on handler MoMessages ", e);
         }
     }
-
 
     private void processMoSmsSubmit(MoForwardShortMessageRequest moForwardShortMessageRequestIndication, SmsSubmitTpdu smsSubmitTpdu) {
         DataCodingScheme dataCodingScheme = smsSubmitTpdu.getDataCodingScheme();
@@ -354,7 +381,6 @@ public class MessageProcessing {
         this.processSendRoutingForSmResponseAction(mapRoutingData, message);
     }
 
-
     private void processSendRoutingForSmResponseAction(MapRoutingData mapRoutingData, MessageEvent message) {
         IMSI imsi = mapRoutingData.getImsi();
         LocationInfoWithLMSI locationInfoWithLMSI = mapRoutingData.getLocationInfoWithLMSI();
@@ -379,7 +405,8 @@ public class MessageProcessing {
 
         if (message.getNetworkIdToMapSri() == -1 || message.getNetworkIdToMapSri() == 0) { // Send MT Forward SM to the same network, 0 mean is a DLR
             if (message.getMessageParts() != null) {
-                message.getMessageParts().forEach(msgPart -> {
+                MessageEvent messageEvenFistPart = null;
+                for (MessagePart msgPart : message.getMessageParts()) {
                     var messageEvent = new MessageEvent().clone(message);
                     messageEvent.setMessageId(msgPart.getMessageId());
                     messageEvent.setShortMessage(msgPart.getShortMessage());
@@ -388,11 +415,17 @@ public class MessageProcessing {
                     messageEvent.setSegmentSequence(msgPart.getSegmentSequence());
                     messageEvent.setUdhJson(msgPart.getUdhJson());
                     messageEvent.setOptionalParameters(msgPart.getOptionalParameters());
-                    this.sendMtForwardSMRequest(messageEvent);
-                });
+                    if (messageEvent.getSegmentSequence() == 1) {
+                        messageEvenFistPart = messageEvent;
+                    } else {
+                        String key = getMessagePartKey(messageEvent, messageEvent.getSegmentSequence());
+                        jedisCluster.setex(key, messageEvent.getValidityPeriod() + 10, messageEvent.toString());
+                    }
+                }
+                this.sendMtForwardSMRequest(messageEvenFistPart, null);
                 return;
             }
-            this.sendMtForwardSMRequest(message);
+            this.sendMtForwardSMRequest(message, null);
             return;
         }
 
@@ -428,28 +461,35 @@ public class MessageProcessing {
             ErrorCodeMapping errorCodeMapping = Objects.nonNull(errorCode) ? this.getErrorCodeMapping(errorCode) : null;
             var dlr = messageFactory.createDeliveryReceiptMessage(sent, errorCodeMapping, extraInformation);
             processCdr(dlr, UtilsEnum.CdrStatus.ENQUEUE, "", false);
-            switch (sent.getOriginProtocol().toUpperCase()) {
-                case "HTTP" -> this.putMessageOnSpecificList("http_dlr", dlr);
-                case "SMPP" -> {
-                    if ("SP".equalsIgnoreCase(sent.getOriginNetworkType())) {
-                        this.putMessageOnSpecificList("smpp_dlr", dlr);
-                        return;
-                    }
-                    dlr.setDlr(false);
-                    this.putMessageOnSpecificList(dlr.getDestNetworkId() + "_smpp_message", dlr);
+            putDlrInList(dlr, sent.getOriginProtocol(), sent.getOriginNetworkType());
+            if (Objects.nonNull(errorCode) && Objects.nonNull(sent.getMsgReferenceNumber())) {
+                MessageEvent nextMessagePart = this.getNextMessagePart(sent);
+                if (Objects.nonNull(nextMessagePart)) {
+                    log.info("Creating DLR for part {} of {} with parentId {}", nextMessagePart.getSegmentSequence(), nextMessagePart.getTotalSegment(), nextMessagePart.getParentId());
+                    prepareAndSendDlr(nextMessagePart, errorCode, extraInformation);
+                } else {
+                    log.warn("No more message part found for create DLR with parent id {}", sent.getParentId());
                 }
-                case "SS7" -> this.putMessageOnNetworkIdList(dlr.getDestNetworkId(), dlr);
-                default -> log.error("No protocol found for send DLR for message {}", sent.getMessageId());
             }
         }
     }
 
-    /**
-     * Handles timeout error when invoking a message, attempting to resend the message to the same network.
-     *
-     * @param message         The message that caused the timeout error.
-     * @param mapErrorMessage The error message associated with the timeout.
-     */
+    private void putDlrInList(MessageEvent dlr, String originProtocol, String originNetworkType) {
+        switch (originProtocol) {
+            case "HTTP" -> this.putMessageOnSpecificList("http_dlr", dlr);
+            case "SMPP" -> {
+                if ("SP".equalsIgnoreCase(originNetworkType)) {
+                    this.putMessageOnSpecificList("smpp_dlr", dlr);
+                } else {
+                    dlr.setDlr(false);
+                    this.putMessageOnSpecificList(dlr.getDestNetworkId() + "_smpp_message", dlr);
+                }
+            }
+            case "SS7" -> this.putMessageOnNetworkIdList(dlr.getDestNetworkId(), dlr);
+            default -> log.error("No protocol found for send DLR for message {}", dlr.getMessageId());
+        }
+    }
+
     private void processInvokeTimeoutError(MessageEvent message, MAPErrorMessage mapErrorMessage) {
         log.warn("The error received is onInvokeTimeout, we will try to send the message again to the same networkId");
         messageEventConcurrentMap.remove(message.getId());
@@ -650,5 +690,41 @@ public class MessageProcessing {
 
         if (writeCdr)
             cdrProcessor.createCdr(message.getMessageId());
+
+
+        // Check if the message is a multipart message
+        if (UtilsEnum.CdrStatus.FAILED.equals(cdrStatus) && Objects.nonNull(message.getMsgReferenceNumber())) {
+            MessageEvent nextMessagePart = this.getNextMessagePart(message);
+            if (Objects.nonNull(nextMessagePart)) {
+                log.info("Message is a multipart message. Creating CDR for each part of the multipart message");
+                processCdr(nextMessagePart, cdrStatus, comment, writeCdr);
+            } else {
+                log.warn("No more message part found for create CDR with parent id {}", message.getParentId());
+            }
+        }
+
+    }
+
+    private String getMessagePartKey(MessageEvent messageEvent, int segmentSequence) {
+        return messageEvent.getParentId() +
+                "_" +
+                messageEvent.getMsgReferenceNumber() +
+                "_" +
+                segmentSequence +
+                "_" +
+                messageEvent.getTotalSegment();
+    }
+
+    private MessageEvent getNextMessagePart(MessageEvent messageEvent) {
+        MessageEvent messagePart = null;
+        int currentSegment = messageEvent.getSegmentSequence();
+        int totalSegments = messageEvent.getTotalSegment();
+        if (currentSegment < totalSegments) {
+            int nextSegment = messageEvent.getSegmentSequence() + 1;
+            String key = getMessagePartKey(messageEvent, nextSegment);
+            String messagePartInRaw = jedisCluster.get(key);
+            messagePart =  Converter.stringToObject(messagePartInRaw, MessageEvent.class);
+        }
+        return messagePart;
     }
 }

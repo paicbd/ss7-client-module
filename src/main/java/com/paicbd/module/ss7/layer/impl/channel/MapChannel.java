@@ -31,7 +31,7 @@ public class MapChannel implements IChannelHandler {
                     break;
 
                 case Constants.ON_DIALOG_CLOSE:
-                    this.messageProcessing.processDialog(channelMessage);
+                    this.messageProcessing.processOnDialogClose(channelMessage);
                     break;
 
                 default:

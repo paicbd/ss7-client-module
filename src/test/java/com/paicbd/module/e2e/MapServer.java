@@ -146,6 +146,9 @@ public class MapServer extends MapListener {
     @Setter
     private InformServiceCentreReaction informServiceCentreReaction = InformServiceCentreReaction.MWD_NO;
 
+    @Setter
+    private boolean responseMtForwardSmWithTcapContinue = false;
+
     public void initializeStack(IpChannelType ipChannelType) throws Exception {
         this.initSCTP(ipChannelType);
         this.initM3UA();
@@ -312,7 +315,11 @@ public class MapServer extends MapListener {
                         mapHandlerBySystemFailureMemoryCapacityExceeded(mapDialogSms, invokeId);
                 case ERROR_SYSTEM_FAILURE_UNKNOWN_SERVICE_CENTRE -> mapHandlerByBySystemFailureUnknownServiceCentre(mapDialogSms, invokeId);
             }
-            mapDialogSms.close(false);
+            if ((this.responseMtForwardSmWithTcapContinue)) {
+                mapDialogSms.send();
+            } else {
+                mapDialogSms.close(false);
+            }
         } catch (MAPException e) {
             log.error("Error while sending MtForwardShortMessageRequest result ", e);
         }

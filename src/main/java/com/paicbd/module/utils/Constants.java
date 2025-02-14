@@ -50,6 +50,7 @@ public class Constants {
     public static final String ON_DIALOG_CLOSE = "onDialogClose";
     public static final String ON_DIALOG_RELEASE = "onDialogRelease";
     public static final String ON_DIALOG_TIMEOUT = "onDialogTimeout";
+    public static final String ON_DIALOG_DELIMITER = "onDialogDelimiter";
     protected static final Map<Long, String> errorToStringMap;
 
     static {
